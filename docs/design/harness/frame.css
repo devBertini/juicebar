@@ -1,0 +1,102 @@
+/* JuiceBar mockup harness: scene frames for macOS and Windows 11.
+   Harness variables are prefixed --hx-. Options use their own names. */
+html { margin: 0; padding: 0; background: #000; }
+html[data-theme="light"] {
+  --hx-fg: #1d1d1f; --hx-muted: rgba(29, 29, 31, .62);
+  --hx-bar-bg: rgba(255, 255, 255, .38); --hx-bar-line: rgba(0, 0, 0, .10);
+  --hx-task-bg: rgba(243, 243, 243, .82); --hx-task-line: rgba(0, 0, 0, .08);
+  --hx-caption: rgba(20, 20, 30, .62);
+}
+html[data-theme="dark"] {
+  --hx-fg: #f5f5f7; --hx-muted: rgba(245, 245, 247, .62);
+  --hx-bar-bg: rgba(28, 28, 36, .38); --hx-bar-line: rgba(255, 255, 255, .10);
+  --hx-task-bg: rgba(32, 32, 32, .82); --hx-task-line: rgba(255, 255, 255, .07);
+  --hx-caption: rgba(255, 255, 255, .6);
+}
+body { margin: 0; position: relative; overflow: hidden; color: var(--hx-fg); -webkit-font-smoothing: antialiased; }
+body * { box-sizing: border-box; }
+.hx-wall { position: absolute; inset: 0; }
+.hx-svg { width: 16px; height: 16px; flex: none; display: block; }
+.hx-svg.s { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.hx-caption { position: absolute; font-size: 11px; line-height: 14px; letter-spacing: .01em; color: var(--hx-caption); z-index: 5; white-space: nowrap; }
+
+/* ---------- Mac scene: 1200 x 750 ---------- */
+body.scene-mac {
+  width: 1200px; height: 750px;
+  font-family: -apple-system, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  font-size: 13px;
+}
+.scene-mac .hx-wall { background: #8a6bd8; }
+html[data-theme="light"] .scene-mac .hx-wall {
+  background:
+    radial-gradient(60% 70% at 18% 20%, #ffb86b 0%, rgba(255, 184, 107, 0) 70%),
+    radial-gradient(55% 65% at 85% 15%, #ff6fa8 0%, rgba(255, 111, 168, 0) 70%),
+    radial-gradient(70% 70% at 75% 85%, #5ab0ff 0%, rgba(90, 176, 255, 0) 70%),
+    radial-gradient(60% 60% at 15% 90%, #9a7bff 0%, rgba(154, 123, 255, 0) 70%),
+    linear-gradient(135deg, #f7d6ff, #bfe0ff);
+}
+html[data-theme="dark"] .scene-mac .hx-wall {
+  background:
+    radial-gradient(60% 70% at 15% 20%, #3b2a8f 0%, rgba(59, 42, 143, 0) 70%),
+    radial-gradient(55% 65% at 88% 12%, #a3246b 0%, rgba(163, 36, 107, 0) 70%),
+    radial-gradient(70% 70% at 70% 90%, #0d6c8c 0%, rgba(13, 108, 140, 0) 70%),
+    radial-gradient(60% 60% at 10% 95%, #5b2db3 0%, rgba(91, 45, 179, 0) 70%),
+    linear-gradient(135deg, #0e1030, #1a0f2e);
+}
+.hx-menubar {
+  position: absolute; left: 0; right: 0; top: 0; height: 24px; z-index: 10;
+  display: flex; align-items: center; justify-content: flex-end; gap: 0; padding: 0 8px 0 0;
+  background: var(--hx-bar-bg); border-bottom: 1px solid var(--hx-bar-line);
+  -webkit-backdrop-filter: blur(30px) saturate(1.6); backdrop-filter: blur(30px) saturate(1.6);
+  font-weight: 500; color: var(--hx-fg);
+}
+.hx-mb-cell { height: 24px; min-width: 26px; padding: 0 5px; display: flex; align-items: center; justify-content: center; flex: none; }
+.hx-mb-clock { padding: 0 8px 0 6px; white-space: pre; font-size: 13px; }
+#bar-item { height: 24px; display: flex; align-items: center; justify-content: center; flex: none; margin: 0 2px; position: relative; }
+#panel { position: absolute; top: 28px; left: 800px; max-width: 380px; max-height: 600px; z-index: 20; }
+#widget { position: absolute; left: 28px; top: 48px; width: 329px; height: 155px; border-radius: 22px; z-index: 6; }
+#notification { position: absolute; left: 28px; top: 219px; width: 344px; z-index: 6; }
+.scene-mac .hx-caption { left: 16px; bottom: 12px; }
+
+/* ---------- Windows scene: 1600 x 1000 ---------- */
+body.scene-win {
+  width: 1600px; height: 1000px;
+  font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; font-size: 12px;
+}
+html[data-theme="light"] .scene-win .hx-wall {
+  background:
+    radial-gradient(38% 50% at 30% 62%, #4f8bff 0%, rgba(79, 139, 255, 0) 72%),
+    radial-gradient(34% 46% at 58% 40%, #8a63ff 0%, rgba(138, 99, 255, 0) 72%),
+    radial-gradient(30% 42% at 78% 72%, #28c4e8 0%, rgba(40, 196, 232, 0) 72%),
+    radial-gradient(28% 40% at 48% 78%, #ff7fb6 0%, rgba(255, 127, 182, 0) 72%),
+    linear-gradient(160deg, #e3efff, #cfe0ff);
+}
+html[data-theme="dark"] .scene-win .hx-wall {
+  background:
+    radial-gradient(38% 50% at 30% 62%, #0b3a9a 0%, rgba(11, 58, 154, 0) 72%),
+    radial-gradient(34% 46% at 58% 40%, #4a2aa8 0%, rgba(74, 42, 168, 0) 72%),
+    radial-gradient(30% 42% at 78% 72%, #0a7d9c 0%, rgba(10, 125, 156, 0) 72%),
+    radial-gradient(28% 40% at 48% 78%, #8a2a62 0%, rgba(138, 42, 98, 0) 72%),
+    linear-gradient(160deg, #050a1c, #0a1030);
+}
+.hx-taskbar {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 48px; z-index: 10;
+  background: var(--hx-task-bg); border-top: 1px solid var(--hx-task-line);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8); backdrop-filter: blur(40px) saturate(1.8);
+  display: flex; align-items: center; color: var(--hx-fg);
+}
+.hx-tb-center { position: absolute; left: 50%; top: 0; height: 47px; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; }
+.hx-tb-app { width: 40px; height: 40px; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+.hx-tb-app i { display: block; width: 22px; height: 22px; border-radius: 6px; background: var(--hx-muted); opacity: .55; }
+.hx-tb-app.on { background: rgba(127, 127, 127, .16); }
+.hx-tb-app.on i { opacity: .85; }
+.hx-tb-right { margin-left: auto; height: 47px; display: flex; align-items: center; padding-right: 4px; }
+.hx-tb-chev { width: 24px; height: 40px; display: flex; align-items: center; justify-content: center; }
+#tray { height: 40px; display: flex; align-items: center; }
+#tray > * { width: 32px; height: 32px; flex: none; display: flex; align-items: center; justify-content: center; }
+.hx-tb-sys { height: 40px; padding: 0 10px; display: flex; align-items: center; gap: 14px; border-radius: 6px; }
+.hx-tb-clock { height: 40px; padding: 0 10px; display: flex; flex-direction: column; justify-content: center; align-items: flex-end; font-size: 12px; line-height: 16px; border-radius: 6px; }
+.hx-tb-bell { width: 36px; height: 40px; display: flex; align-items: center; justify-content: center; }
+#flyout { position: absolute; bottom: 60px; left: 1100px; max-width: 380px; max-height: 640px; z-index: 20; }
+#toast { position: absolute; left: 48px; bottom: 60px; width: 364px; z-index: 6; }
+.scene-win .hx-caption { left: 16px; top: 17px; z-index: 11; }

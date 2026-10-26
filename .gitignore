@@ -1,0 +1,24 @@
+# Rust build output
+/windows/target/
+**/target/
+# Xcode and macOS
+xcuserdata/
+*.xcresult
+DerivedData/
+.build/
+.swiftpm/
+.DS_Store
+._*
+# Generated renders, captures and galleries (root section 5: made again by their scripts)
+docs/**/*.png
+docs/design/index.html
+captures/
+# Raw probe output (only sanitized fixtures under spec/fixtures/ are versioned)
+**/probe-output/
+# Secrets never enter the repository (root 1.7)
+.env
+*.pem
+*.key
+*.p8
+*.p12
+*.mobileprovision
