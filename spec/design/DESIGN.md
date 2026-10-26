@@ -3,7 +3,7 @@
 The owner chose option 1, Native, with one change: a single icon in the menu bar and in the tray, never one per device, so JuiceBar takes the least room in anyone's bar. The reference drawing is `docs/design/options/1-native/` (render it with `scripts/render_design.ps1 -Option 1-native`); where the drawing and this file differ, this file wins.
 
 ## The bar item and the tray icon
-- One icon only: the JuiceBar mark (to be drawn; its concept is the owner's pick), monochrome, in the bar's own color (a template image on the Mac; the taskbar's foreground color on Windows, redrawn when the theme changes).
+- One icon only: the JuiceBar mark, a juice glass with a straw, the juice up to about half (the owner's pick: on-name, and never confused with the system battery icon beside it on the Mac), monochrome, in the bar's own color (a template image on the Mac; the taskbar's foreground color on Windows, redrawn when the theme changes).
 - It changes only to signal: red while a smart warning or a low battery is active; a small bolt while any device charges. Nothing else animates or changes.
 - Hover shows every device in one line each (Windows tooltip; on the Mac the panel is one click away). Left click opens the panel; right click on the Mac offers Quit.
 
