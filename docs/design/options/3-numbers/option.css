@@ -1,0 +1,89 @@
+/* JuiceBar option 3: Numbers. Typography first; semantic red and green only. */
+:root[data-theme="light"] {
+  --ink: #17181a; --mute: rgba(23,24,26,.58); --faint: rgba(23,24,26,.34); --hair: rgba(23,24,26,.13);
+  --red: #d3261c; --green: #14803c;
+  --surf: rgba(250,250,248,.80); --surf-edge: rgba(255,255,255,.7); --shadow: 0 18px 50px rgba(20,20,30,.28), 0 2px 8px rgba(20,20,30,.12);
+  --chip: rgba(23,24,26,.06);
+}
+:root[data-theme="dark"] {
+  --ink: #f4f4f2; --mute: rgba(244,244,242,.62); --faint: rgba(244,244,242,.36); --hair: rgba(244,244,242,.15);
+  --red: #ff6b5e; --green: #4cd27a;
+  --surf: rgba(28,28,31,.76); --surf-edge: rgba(255,255,255,.12); --shadow: 0 18px 50px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.3);
+  --chip: rgba(255,255,255,.08);
+}
+.nb, .nb * { box-sizing: border-box; }
+.nb { color: var(--ink); font-family: "SF Pro Display", -apple-system, "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; }
+.nb .num { font-weight: 250; letter-spacing: -.04em; line-height: 1; font-variant-numeric: tabular-nums; }
+.nb .num sup { font-size: .36em; font-weight: 400; letter-spacing: 0; vertical-align: top; position: relative; top: .22em; margin-left: .06em; color: var(--mute); }
+.nb .low { color: var(--red); } .nb .chg { color: var(--green); } .nb .dim { color: var(--faint); }
+.nb svg.g { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+
+.nb-surface { background: var(--surf); backdrop-filter: blur(30px) saturate(1.6); -webkit-backdrop-filter: blur(30px) saturate(1.6); box-shadow: var(--shadow), inset 0 0 0 1px var(--surf-edge); }
+
+/* Mac bar item */
+.bar { display: flex; align-items: center; gap: 9px; height: 24px; padding: 0 4px; color: var(--hx-fg, var(--ink)); font: 600 12.5px/1 -apple-system, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.bar .it { display: flex; align-items: center; gap: 3px; }
+.bar .it svg.g { width: 13px; height: 13px; opacity: .85; stroke-width: 1.9; }
+.bar .it svg.bolt { width: 9px; height: 9px; fill: currentColor; stroke: none; margin-left: -1px; opacity: 1; }
+.bar .low { color: #ff4d42; } .bar .chg { color: #2fd05f; } .bar .dim { opacity: .45; }
+html[data-theme="light"] .bar .low { color: #d3261c; } html[data-theme="light"] .bar .chg { color: #0f8a3a; }
+
+/* panel / flyout */
+.sheet { width: 380px; border-radius: 14px; padding: 0 20px; }
+.sheet.win { border-radius: 8px; }
+.dev { padding: 13px 0 12px; border-top: 1px solid var(--hair); }
+.dev:first-child { border-top: 0; }
+.dev .top { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--mute); font-weight: 500; }
+.dev .top svg.g { width: 13px; height: 13px; }
+.dev .top .nm { color: var(--ink); font-weight: 600; }
+.dev .top .cn { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.dev .top .cn svg.g { width: 12px; height: 12px; }
+.dev .row { display: flex; align-items: baseline; justify-content: space-between; margin-top: 5px; }
+.dev .num { font-size: 40px; }
+.dev .fc { font-size: 12.5px; color: var(--mute); text-align: right; font-weight: 450; }
+.dev .fc b { color: var(--ink); font-weight: 600; }
+.dev.hero { padding-top: 16px; }
+.dev.hero .num { font-size: 62px; }
+.dev .chart { display: block; width: 100%; height: 46px; margin-top: 10px; overflow: visible; }
+.dev .facts { display: flex; justify-content: space-between; margin-top: 8px; font-size: 11.5px; color: var(--mute); }
+.dev .facts b { color: var(--ink); font-weight: 600; }
+.dev .warn { margin-top: 8px; color: var(--red); font-weight: 650; font-variant-caps: all-small-caps; font-size: 13px; letter-spacing: .04em; }
+.foot { display: flex; align-items: center; gap: 10px; padding: 12px 0 13px; border-top: 1px solid var(--hair); font-size: 12px; color: var(--ink); font-weight: 500; }
+.foot .lf { display: flex; align-items: center; gap: 8px; }
+.foot .lf svg.g { font-size: 15px; color: var(--mute); }
+.foot .sp { margin-left: auto; }
+.tg { width: 30px; height: 18px; border-radius: 9px; background: var(--chip); box-shadow: inset 0 0 0 1px var(--hair); position: relative; flex: none; }
+.tg::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--mute); }
+.foot .gear { font-size: 16px; color: var(--mute); display: flex; }
+.foot .hk { font-size: 11.5px; color: var(--mute); padding: 2px 6px; border-radius: 5px; background: var(--chip); letter-spacing: .04em; }
+
+/* widget */
+.widget { width: 329px; height: 155px; border-radius: 22px; padding: 16px 18px 14px; display: flex; flex-direction: column; justify-content: space-between; }
+.widget .cols { display: flex; }
+.widget .col { flex: 1; padding-left: 12px; border-left: 1px solid var(--hair); }
+.widget .col:first-child { padding-left: 0; border-left: 0; }
+.widget .col .l { font-size: 11px; color: var(--mute); font-weight: 600; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.widget .col .l svg.g { width: 12px; height: 12px; }
+.widget .col .num { font-size: 46px; margin-top: 8px; }
+.widget .col .s { font-size: 10.5px; color: var(--mute); margin-top: 6px; white-space: nowrap; }
+.widget .others { font-size: 11.5px; color: var(--mute); border-top: 1px solid var(--hair); padding-top: 8px; display: flex; gap: 14px; white-space: nowrap; }
+.widget .others b { color: var(--ink); font-weight: 600; margin-left: 4px; }
+
+/* notification / toast */
+.note { padding: 12px 14px; display: flex; gap: 12px; align-items: flex-start; }
+.note.mac { width: 344px; border-radius: 20px; }
+.note.wn { width: 364px; border-radius: 8px; }
+.note .big { font-size: 36px; min-width: 66px; }
+.note .tx { flex: 1; min-width: 0; }
+.note .app { font-size: 11px; color: var(--mute); display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
+.note .app svg.g { width: 12px; height: 12px; }
+.note .ti { font-size: 13.5px; font-weight: 650; }
+.note .bd { font-size: 12.5px; color: var(--mute); margin-top: 2px; line-height: 1.35; }
+.note .when { margin-left: auto; }
+
+/* Windows tray icon */
+.tico { width: 16px; height: 16px; position: relative; color: var(--hx-fg, #fff); font: 700 11px/1 "Segoe UI Variable Text","Segoe UI",sans-serif; letter-spacing: -.5px; text-align: center; font-variant-numeric: tabular-nums; }
+.tico .d { display: block; height: 12px; line-height: 12px; }
+.tico .u { position: absolute; left: 1px; right: 1px; bottom: 0; height: 2px; border-radius: 1px; background: rgba(128,128,128,.45); }
+.tico .u i { display: block; height: 100%; border-radius: 1px; background: currentColor; }
+.tico.low { color: #ff6b5e; } .tico.chg { color: #4cd27a; }

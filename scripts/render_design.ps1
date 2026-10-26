@@ -79,17 +79,28 @@ finally {
 # ---- gallery: every option that has renders ----
 $groups = @()
 if (Test-Path $rendersDir) {
+  # Option names in pt-BR (HTML entities: PowerShell 5.1 reads this file as ANSI). 0-empty is the template, not an option.
+  $names = @{ '1-native' = 'Nativo'; '2-rings' = 'An&eacute;is'; '3-numbers' = 'N&uacute;meros'; '4-pill' = 'P&iacute;lula &uacute;nica'; '5-hud' = 'HUD' }
   foreach ($d in (Get-ChildItem $rendersDir -Directory | Sort-Object Name)) {
+    if ($d.Name -like '0-*') { continue }
     $files = @('mac-light', 'mac-dark', 'win-light', 'win-dark')
     if (@($files | Where-Object { Test-Path (Join-Path $d.FullName "$_.png") }).Count -eq 0) { continue }
-    $title = $d.Name -replace '^(\d+)-(.*)$', 'Op&ccedil;&atilde;o $1: $2'
+    $num = $d.Name -replace '^(\d+)-.*$', '$1'
+    $name = if ($names.ContainsKey($d.Name)) { $names[$d.Name] } else { $d.Name -replace '^\d+-', '' }
+    $title = "Op&ccedil;&atilde;o ${num}: $name"
+    # Close-ups at 2x of the menu bar's right end and of the tray corner, cut from the same renders.
+    $zoom = ''
+    foreach ($z in @(@('mac-dark', 'Barra de menus (escuro)', 'bar'), @('mac-light', 'Barra de menus (claro)', 'bar'), @('win-dark', 'Bandeja (escuro)', 'tray'), @('win-light', 'Bandeja (claro)', 'tray'))) {
+      $rel = 'renders/' + $d.Name + '/' + $z[0] + '.png'
+      $zoom += "<figure><figcaption>$($z[1])</figcaption><div class=`"zoom $($z[2])`" style=`"background-image:url('$rel')`"></div></figure>`n"
+    }
     $cells = ''
     foreach ($f in $files) {
       $label = @{ 'mac-light' = 'Mac claro'; 'mac-dark' = 'Mac escuro'; 'win-light' = 'Windows claro'; 'win-dark' = 'Windows escuro' }[$f]
       $rel = 'renders/' + $d.Name + '/' + $f + '.png'
       $cells += "<figure><figcaption>$label</figcaption><a href=`"$rel`"><img src=`"$rel`" alt=`"$($d.Name) $label`"></a></figure>`n"
     }
-    $groups += "<section><h2>$title</h2><div class=`"grid`">`n$cells</div></section>"
+    $groups += "<section><h2>$title</h2><div class=`"zooms`">`n$zoom</div><div class=`"grid`">`n$cells</div></section>"
   }
 }
 $page = @"
@@ -107,6 +118,10 @@ $page = @"
   figure { margin: 0; }
   figcaption { font-size: 12px; color: #9aa1b2; margin-bottom: 6px; }
   img { width: 100%; height: auto; display: block; border-radius: 8px; background: #000; }
+  .zooms { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
+  .zoom { width: 100%; border-radius: 8px; background-repeat: no-repeat; }
+  .zoom.bar { aspect-ratio: 900 / 50; background-size: 266.67% auto; background-position: right top; }
+  .zoom.tray { aspect-ratio: 640 / 72; background-size: 375% auto; background-position: right bottom; }
 </style>
 </head>
 <body>
