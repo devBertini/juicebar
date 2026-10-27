@@ -14,7 +14,7 @@ The owner chose option 1, Native, with one change: a single icon in the menu bar
 - Header: "JuiceBar" and the gear (settings).
 - One row per device: glyph in a tinted circle, name, connection label, percent (large, tabular digits), a slim capsule, and one line of status: "~3 h de uso", "cheio em ~1 h 10 min", or "desligado · 71% às 14:02". Devices that are on come first; off devices after a quiet "Desligados" separator.
 - A click on a row expands it (one at a time; a device with a warning opens expanded): the smart warning (if any), a 7-day level chart (area line) with a dashed forecast to 0%, "Hoje: <tempo> de uso", hours of use per day for the last 7 days as small bars, and "Saúde da bateria: <n>%" ("aprendendo" until three cycles). A device without a reading shows "–", no capsule fill and no red.
-- Footer: "Economia de RGB" switch and the hotkey hint.
+- Footer: the "Economia de Energia" switch (English "Power saver") with a small (i) whose hover or click says it turns off the devices' LEDs so their batteries last longer, and the hotkey hint.
 - Colors come from the system: on the Mac `labelColor`, `secondaryLabelColor`, `tertiaryLabelColor`, `controlAccentColor`, `systemRed`, `systemGreen`, `systemOrange`; on Windows the theme's foreground and the user's accent color. The mockup's values (below) are only the approximation used in the drawing.
 
 | Token (mockup) | Light | Dark |

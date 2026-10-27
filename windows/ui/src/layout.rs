@@ -143,7 +143,7 @@ pub struct FooterGeom {
     pub icon: Rect,
     pub label: Rect,
     pub switch: Rect,
-    /// Click area of the whole "Economia de RGB" control.
+    /// Click area of the whole "Economia de Energia" control.
     pub switch_hit: Rect,
     pub hotkey: Rect,
 }

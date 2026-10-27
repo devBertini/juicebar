@@ -16,7 +16,7 @@ use juicebar_core::types::DeviceKey;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Settings {
-    /// The "RGB saver" switch.
+    /// The power saver switch.
     pub rgb_economy: bool,
     /// Devices the user hid from the flyout and the icon (the registry's removed list).
     pub hidden: Vec<DeviceKey>,

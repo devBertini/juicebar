@@ -221,7 +221,7 @@ impl<H: Host> Live<H> {
         self.schedule_batches();
     }
 
-    /// The user flipped the RGB saver: every tracker learns it (a new anchor, another prior).
+    /// The user flipped the power saver: every tracker learns it (a new anchor, another prior).
     pub fn set_rgb_economy(&mut self, on: bool, now: Now) {
         if self.rgb_economy == on {
             return;

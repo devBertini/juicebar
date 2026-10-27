@@ -176,7 +176,7 @@ pub struct App {
     source: RefCell<Source>,
     snapshot: RefCell<Snapshot>,
     tracker: RefCell<Tracker>,
-    /// The "RGB saver" switch (stored in settings.txt, handed to every tracker; it does not yet change the
+    /// The power saver switch (stored in settings.txt, handed to every tracker; it does not yet change the
     /// devices' lighting).
     rgb_economy: Cell<bool>,
     expanded: RefCell<Option<DeviceKey>>,

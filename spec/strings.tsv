@@ -52,7 +52,7 @@ coarse_critical	battery critical	bateria crítica
 section_off	Off	Desligados
 panel_title	JuiceBar	JuiceBar
 panel_on_count	{0} on	{0} ligados
-rgb_saver	RGB saver	Economia de RGB
+rgb_saver	Power saver	Economia de Energia
 tooltip_line	{0} {1}%	{0} {1}%
 tooltip_line_status	{0} {1}% · {2}	{0} {1}% · {2}
 tooltip_off	{0} · off	{0} · desligado
@@ -70,3 +70,5 @@ chart_forecast	forecast	previsão
 stat_today	Today	Hoje
 stat_of_use	of use	de uso
 stat_health	Battery health	Saúde da bateria
+rgb_saver_info	Turns off the lights (LEDs) of supported devices so their batteries last longer	Desliga as luzes (LEDs) dos dispositivos compatíveis para a bateria durar mais
+lighting_reapplied	G HUB is reapplying the lighting	o G HUB está reaplicando a iluminação

@@ -85,7 +85,7 @@ pub struct UiLabels {
     pub learning: String,
     /// Separator over the devices that are off: "Desligados".
     pub off_devices: String,
-    /// The footer switch: "Economia de RGB".
+    /// The footer switch: "Economia de Energia".
     pub rgb_economy: String,
 }
 
@@ -99,7 +99,7 @@ impl Default for UiLabels {
             battery_health: "Saúde da bateria".into(),
             learning: "aprendendo".into(),
             off_devices: "Desligados".into(),
-            rgb_economy: "Economia de RGB".into(),
+            rgb_economy: "Economia de Energia".into(),
         }
     }
 }

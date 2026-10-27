@@ -27,10 +27,7 @@ pub struct ViewInput<'a> {
 
 /// The footer text while a read-back finds G HUB putting the lighting back after the RGB economy turned it down.
 pub fn ghub_notice(lang: Lang) -> &'static str {
-    match lang {
-        Lang::PtBr => "o G HUB está reaplicando a iluminação",
-        Lang::En => "G HUB is reapplying the lighting",
-    }
+    strings::get(lang, id::LIGHTING_REAPPLIED)
 }
 
 pub fn glyph_for(kind: Kind) -> Glyph {
@@ -183,7 +180,7 @@ mod tests {
         let en = labels(Lang::En);
         assert_eq!(en.last_7_days, "Last 7 days");
         assert_eq!(en.off_devices, "Off");
-        assert_eq!(en.rgb_economy, "RGB saver");
+        assert_eq!(en.rgb_economy, "Power saver");
         let pt = labels(Lang::PtBr);
         assert_eq!(pt.last_7_days, "Últimos 7 dias");
         assert_eq!(pt.battery_health, "Saúde da bateria");

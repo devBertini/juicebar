@@ -107,7 +107,7 @@ mod tests {
         let pt = flyout_pixels(&s, 1.0).unwrap();
         let mut en = s.clone();
         en.labels.last_7_days = "Last 7 days".into();
-        en.labels.rgb_economy = "RGB saver".into();
+        en.labels.rgb_economy = "Power saver".into();
         let px = flyout_pixels(&en, 1.0).unwrap();
         assert_eq!((pt.width, pt.height), (px.width, px.height));
         assert_ne!(pt.data, px.data);

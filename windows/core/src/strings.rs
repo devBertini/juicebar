@@ -111,7 +111,9 @@ ids! {
     CHART_FORECAST = "chart_forecast",
     STAT_TODAY = "stat_today",
     STAT_OF_USE = "stat_of_use",
-    STAT_HEALTH = "stat_health"
+    STAT_HEALTH = "stat_health",
+    RGB_SAVER_INFO = "rgb_saver_info",
+    LIGHTING_REAPPLIED = "lighting_reapplied"
 }
 
 type Table = HashMap<&'static str, (&'static str, &'static str)>;
