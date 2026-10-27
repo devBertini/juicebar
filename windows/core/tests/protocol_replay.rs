@@ -194,23 +194,78 @@ fn g733_dongle_trace() {
         ]
     );
     let ev = rig.take_events();
-    assert_eq!(ev.len(), 4, "{ev:?}");
+    // The device is announced with its first battery answer: the ping proves only the dongle.
+    assert_eq!(ev.len(), 3, "{ev:?}");
     let first = appeared(&ev[0]);
-    assert_eq!(first.name, "G733");
+    assert_eq!(first.name, "G733 Gaming Headset");
     assert_eq!(
         (first.kind, first.connection),
         (Kind::Headset, Connection::Dongle)
     );
     assert_eq!(first.key, logitech_key(Match::Dongle, 0x0AB5));
     assert!(presence_online(&ev[1]));
-    assert_eq!(appeared(&ev[2]).name, "G733 Gaming Headset");
     // 3752 mV on the interim g733 curve; the flags byte (0x01) is not decoded as charging.
-    let r = battery(&ev[3]);
+    let r = battery(&ev[2]);
     assert_eq!(r.millivolts, Some(3752));
     assert_eq!(r.quality, Quality::Derived);
     assert_eq!(r.charging, Charging::Unknown);
     assert!((r.percent.unwrap() - 45.0 * 352.0 / 353.0).abs() < 1e-9);
     rig.assert_protocol_only(&[(3, 0), (3, 1), (8, 0)], &[]);
+}
+
+#[test]
+fn g733_dongle_with_the_headset_off_is_offline_and_has_no_reading() {
+    // The dongle answers the root ping by itself; the headset's battery request gets the HID++ 2.0 error 0x05.
+    let mut rig = Rig::new();
+    let mut fake = Fake::from_trace(G733_TRACE, 1, 1);
+    fake.script(&long("11ff080d00"), &long("11ffff080d05"));
+    rig.add_fake(fake, &[1]);
+    rig.arrive(endpoint(1, 0x0AFE, 0xFF43, 0x0202, 20));
+    let ev = rig.take_events();
+    let presence: Vec<bool> = ev
+        .iter()
+        .filter_map(|e| match e {
+            ProviderEvent::Presence(_, p) => Some(p.online),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(presence, vec![false], "{ev:?}");
+    assert!(
+        !ev.iter().any(|e| matches!(e, ProviderEvent::Battery(..))),
+        "{ev:?}"
+    );
+    assert!(matches!(&ev[0], ProviderEvent::Appeared(i) if i.kind == Kind::Headset));
+}
+
+#[test]
+fn g733_dongle_comes_online_with_its_reading_when_the_battery_answers() {
+    let mut rig = Rig::new();
+    let mut fake = Fake::from_trace(G733_TRACE, 1, 1);
+    fake.script(&long("11ff080d00"), &long("11ffff080d05"));
+    rig.add_fake(fake, &[1]);
+    rig.arrive(endpoint(1, 0x0AFE, 0xFF43, 0x0202, 20));
+    rig.take_events();
+    // The headset is switched on: the check 60 s later reads the battery and the answer brings it online.
+    let restored = Fake::from_trace(G733_TRACE, 1, 1);
+    rig.fakes[0] = restored;
+    rig.advance(61.0);
+    let ev = rig.take_events();
+    let presence: Vec<bool> = ev
+        .iter()
+        .filter_map(|e| match e {
+            ProviderEvent::Presence(_, p) => Some(p.online),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(presence, vec![true], "{ev:?}");
+    let r = ev
+        .iter()
+        .find_map(|e| match e {
+            ProviderEvent::Battery(_, r) => Some(r),
+            _ => None,
+        })
+        .expect("a reading");
+    assert_eq!(r.millivolts, Some(3752));
 }
 
 #[test]
