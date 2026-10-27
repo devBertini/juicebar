@@ -12,19 +12,8 @@ use crate::glyphs::{self, Shape};
 use crate::layout::{DetailGeom, FlyoutHit, Layout, Metrics, Rect, RowGeom};
 use crate::model::{Glyph, Rgb, Theme, UiDevice, UiState};
 
-/// Visible strings of the flyout (pt-BR source; the integration will take them from the core's
-/// string table).
-pub mod text {
-    pub const TITLE: &str = "JuiceBar";
-    pub const LAST_7_DAYS: &str = "Últimos 7 dias";
-    pub const FORECAST: &str = "previsão";
-    pub const TODAY: &str = "Hoje";
-    pub const BATTERY_HEALTH: &str = "Saúde da bateria";
-    pub const LEARNING: &str = "aprendendo";
-    pub const OFF_DEVICES: &str = "Desligados";
-    pub const RGB_ECONOMY: &str = "Economia de RGB";
-    pub const OF_USE: &str = "de uso";
-}
+/// The product name in the header; every other label comes from `UiState::labels`.
+pub const TITLE: &str = "JuiceBar";
 
 /// The theme's colors (the mockup's Windows tokens, `spec/design/DESIGN.md`).
 #[derive(Clone, Copy)]
@@ -174,7 +163,7 @@ impl Fonts {
 pub fn measure_metrics(g: &Gfx, state: &UiState) -> Result<Metrics> {
     let f = Fonts::new(g)?;
     Ok(Metrics {
-        rgb_label_w: g.measure(text::RGB_ECONOMY, &f.rgb)?.0.ceil(),
+        rgb_label_w: g.measure(&state.labels.rgb_economy, &f.rgb)?.0.ceil(),
         hotkey_w: g.measure(&state.hotkey_text, &f.kbd)?.0.ceil(),
     })
 }
@@ -251,7 +240,7 @@ pub fn paint_flyout(
     }
 
     // Header.
-    c.text_in(text::TITLE, &f.title, layout.title, Align::Left, p.fg)?;
+    c.text_in(TITLE, &f.title, layout.title, Align::Left, p.fg)?;
     if opts.hover == FlyoutHit::Gear {
         c.fill_rrect(layout.gear, 4.0, p.hover);
     }
@@ -290,7 +279,13 @@ pub fn paint_flyout(
     }
 
     if let Some(sep) = layout.separator {
-        let t = c.text_layout(text::OFF_DEVICES, &f.small, sep.w, sep.h, Align::Left)?;
+        let t = c.text_layout(
+            &state.labels.off_devices,
+            &f.small,
+            sep.w,
+            sep.h,
+            Align::Left,
+        )?;
         c.draw_text_at(&t, sep.x, sep.y + (sep.h - t.h) / 2.0, p.fg3);
         let y = c.snap(sep.cy());
         c.line(
@@ -316,7 +311,13 @@ pub fn paint_flyout(
         c.fill_rrect(ft.switch_hit, 6.0, p.hover);
     }
     draw_glyph(c, Glyph::Leaf, ft.icon, p.green, false, glyphs::STROKE)?;
-    c.text_in(text::RGB_ECONOMY, &f.rgb, ft.label, Align::Left, p.fg)?;
+    c.text_in(
+        &state.labels.rgb_economy,
+        &f.rgb,
+        ft.label,
+        Align::Left,
+        p.fg,
+    )?;
     paint_switch(c, &p, ft.switch, state.rgb_economy);
     c.fill_rrect(ft.hotkey, 4.0, p.tile);
     c.stroke_rrect(ft.hotkey, 4.0, c.hairline(), p.stroke);
@@ -485,7 +486,7 @@ fn paint_detail(
 
     // Chart title and the forecast key.
     c.text_in(
-        text::LAST_7_DAYS,
+        &state.labels.last_7_days,
         &f.small,
         Rect::new(
             g.chart_title.x + 2.0,
@@ -497,7 +498,7 @@ fn paint_detail(
         p.fg2,
     )?;
     let key = c.text_layout(
-        text::FORECAST,
+        &state.labels.forecast,
         &f.small,
         120.0,
         g.chart_title.h,
@@ -597,21 +598,21 @@ fn paint_detail(
     let label_row = |r: Rect| Rect::new(r.x, r.y, r.w, 15.0);
     let value_row = |r: Rect| Rect::new(r.x, r.y + 16.0, r.w, 17.0);
     c.text_in(
-        text::TODAY,
+        &state.labels.today,
         &f.small,
         label_row(g.today),
         Align::Left,
         p.fg2,
     )?;
     c.text_in(
-        &format!("{} {}", d.usage_today, text::OF_USE),
+        &format!("{} {}", d.usage_today, state.labels.of_use),
         &f.stat,
         value_row(g.today),
         Align::Left,
         p.fg,
     )?;
     c.text_in(
-        text::BATTERY_HEALTH,
+        &state.labels.battery_health,
         &f.small,
         label_row(g.health),
         Align::Left,
@@ -619,7 +620,7 @@ fn paint_detail(
     )?;
     let health = d
         .health
-        .map_or_else(|| text::LEARNING.to_string(), |h| format!("{h}%"));
+        .map_or_else(|| state.labels.learning.clone(), |h| format!("{h}%"));
     c.text_in(&health, &f.stat, value_row(g.health), Align::Left, p.fg)?;
     Ok(())
 }

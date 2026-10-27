@@ -1,41 +1,26 @@
 // Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
-//! The flyout window: a `WS_POPUP` created when shown and destroyed when hidden, drawn with
-//! Direct2D into a DirectComposition swap chain so the DWM system backdrop (acrylic) shows
-//! through, with rounded corners from the DWM. No timers, no animation: it draws on show, on
-//! hover changes and on `update`, and holds no resources while hidden.
+//! The flyout window: a `WS_POPUP` created when shown and destroyed when hidden. Direct2D draws it
+//! on the CPU (the render seam's WIC path, so a PNG is what the user sees) into a 32-bit
+//! premultiplied DIB section, and `WM_PAINT` copies that to the window with GDI. The DWM frame is
+//! extended over the whole client area, so transparent pixels show the system backdrop (acrylic),
+//! and the DWM rounds the corners. No Direct3D device is ever made: a GPU device loads the graphics
+//! driver into the process (about 50 MiB of private memory while it lives). No timers, no
+//! animation: it draws on show, on hover changes and on `update`, and holds nothing while hidden.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use windows::Win32::Foundation::{E_FAIL, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
-};
-use windows::Win32::Graphics::Direct2D::{
-    D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
-    D2D1_DEVICE_CONTEXT_OPTIONS_NONE, ID2D1DeviceContext, ID2D1RenderTarget,
-};
-use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
-use windows::Win32::Graphics::Direct3D11::{
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
-};
-use windows::Win32::Graphics::DirectComposition::{
-    DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
-};
+use windows::Win32::Foundation::{E_FAIL, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
-    DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    DWMSBT_TRANSIENTWINDOW, DWMWA_CLOAK, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
     DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmExtendFrameIntoClientArea,
     DwmSetWindowAttribute,
 };
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
-};
-use windows::Win32::Graphics::Dxgi::{
-    DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-    DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
-};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect,
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint, GetMonitorInfoW, HBITMAP, HDC, HGDIOBJ,
+    HMONITOR, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect, PAINTSTRUCT,
+    SRCCOPY, SelectObject, UpdateWindow,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::MARGINS;
@@ -49,15 +34,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
     GetWindowLongPtrW, IDC_ARROW, IsWindow, LoadCursorW, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE,
-    SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_INACTIVE,
-    WM_ACTIVATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
-    WM_NCDESTROY, WNDCLASSEXW, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP,
+    SWP_NOMOVE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    WA_INACTIVE, WM_ACTIVATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
-use windows::core::{Error, Interface, PCWSTR, Result, w};
+use windows::core::{Error, PCWSTR, Result, w};
 
 use crate::draw::{PaintOptions, measure_metrics, paint_flyout};
-use crate::gfx::{Canvas, Gfx};
+use crate::gfx::{Gfx, render_offscreen_into};
 use crate::layout::{FlyoutHit, Layout, PxRect, place, scale_from_dpi, size_px};
 use crate::model::{Theme, UiState};
 
@@ -80,7 +64,8 @@ struct Inner {
     state: RefCell<UiState>,
     layout: RefCell<Layout>,
     gfx: Gfx,
-    gpu: RefCell<Option<Gpu>>,
+    /// The pixels `WM_PAINT` copies to the window; dropped with the window.
+    surface: RefCell<Option<Surface>>,
     scale: Cell<f32>,
     hover: Cell<FlyoutHit>,
     tracking: Cell<bool>,
@@ -91,15 +76,81 @@ struct Inner {
     handlers: RefCell<Handlers>,
 }
 
-/// The window's swap chain and the Direct2D context that draws into it.
-struct Gpu {
-    swap: IDXGISwapChain1,
-    dc: ID2D1DeviceContext,
-    // Kept alive for the window's lifetime.
-    _d3d: ID3D11Device,
-    _dcomp: IDCompositionDevice,
-    _target: IDCompositionTarget,
-    _visual: IDCompositionVisual,
+/// A 32-bit top-down DIB section selected into a memory DC: what the window shows.
+struct Surface {
+    dc: HDC,
+    bitmap: HBITMAP,
+    old: HGDIOBJ,
+    bits: *mut u8,
+    width: u32,
+    height: u32,
+}
+
+impl Surface {
+    fn new(width: u32, height: u32) -> Result<Surface> {
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width as i32,
+                biHeight: -(height as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: a memory DC compatible with the screen and a DIB section described by `bmi`;
+        // every handle is owned by the returned value and released in `Drop`, or here on failure.
+        unsafe {
+            let dc = CreateCompatibleDC(None);
+            if dc.is_invalid() {
+                return Err(Error::from_thread());
+            }
+            let bitmap = match CreateDIBSection(Some(dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
+            {
+                Ok(b) if !bits.is_null() => b,
+                Ok(b) => {
+                    let _ = DeleteObject(b.into());
+                    let _ = DeleteDC(dc);
+                    return Err(Error::from(E_FAIL));
+                }
+                Err(e) => {
+                    let _ = DeleteDC(dc);
+                    return Err(e);
+                }
+            };
+            let old = SelectObject(dc, bitmap.into());
+            Ok(Surface {
+                dc,
+                bitmap,
+                old,
+                bits: bits as *mut u8,
+                width,
+                height,
+            })
+        }
+    }
+
+    fn pixels(&mut self) -> &mut [u8] {
+        // SAFETY: the DIB section holds width * 4 * height bytes for as long as `self` lives,
+        // and `&mut self` makes this the only view of them.
+        unsafe {
+            std::slice::from_raw_parts_mut(self.bits, (self.width * 4 * self.height) as usize)
+        }
+    }
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        // SAFETY: the handles were made in `new` and are released once, the bitmap deselected first.
+        unsafe {
+            SelectObject(self.dc, self.old);
+            let _ = DeleteObject(self.bitmap.into());
+            let _ = DeleteDC(self.dc);
+        }
+    }
 }
 
 const CLASS: PCWSTR = w!("JuiceBarFlyout");
@@ -169,7 +220,7 @@ impl Flyout {
             state: RefCell::new(state),
             layout: RefCell::new(layout),
             gfx,
-            gpu: RefCell::new(None),
+            surface: RefCell::new(None),
             scale: Cell::new(scale),
             hover: Cell::new(FlyoutHit::None),
             tracking: Cell::new(false),
@@ -183,7 +234,7 @@ impl Flyout {
         // SAFETY: the class is registered; `raw` stays valid until WM_NCDESTROY reclaims it.
         let created = unsafe {
             CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,
+                WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
                 CLASS,
                 w!("JuiceBar"),
                 WS_POPUP,
@@ -208,13 +259,23 @@ impl Flyout {
         inner.hwnd.set(hwnd);
         let flyout = Flyout { inner };
         flyout.inner.apply_dwm_attributes();
-        flyout.inner.create_gpu(w as u32, h as u32)?;
-        flyout.inner.draw()?;
+        // The window is activated before the first draw, cloaked so nothing half-drawn shows:
+        // an activation while `d3d11.dll` is in the process costs about 54 MiB of private
+        // memory that stays after the window is gone (the `gfx` module notes), and Direct2D
+        // loads `d3d11.dll` only when it draws.
+        set_cloak(hwnd, true);
         // SAFETY: `hwnd` is the window just created on this thread.
         unsafe {
             let _ = ShowWindow(hwnd, SW_SHOW);
             let _ = SetForegroundWindow(hwnd);
         }
+        let drawn = flyout.inner.draw();
+        // SAFETY: as above; UpdateWindow paints the surface now, before the window is uncloaked.
+        unsafe {
+            let _ = UpdateWindow(hwnd);
+        }
+        set_cloak(hwnd, false);
+        drawn?;
         Ok(flyout)
     }
 
@@ -285,6 +346,13 @@ impl Drop for Flyout {
     fn drop(&mut self) {
         self.hide();
     }
+}
+
+/// Hides (`true`) or shows the window on screen without changing its state or activation.
+fn set_cloak(hwnd: HWND, cloak: bool) {
+    let v: i32 = cloak as i32;
+    // SAFETY: a 4-byte BOOL that outlives the call; failure only leaves the window uncloaked.
+    let _ = unsafe { DwmSetWindowAttribute(hwnd, DWMWA_CLOAK, &v as *const i32 as *const _, 4) };
 }
 
 fn module_instance() -> Option<HINSTANCE> {
@@ -364,125 +432,76 @@ impl Inner {
         self.backdrop.set(ok);
     }
 
-    fn create_gpu(&self, w: u32, h: u32) -> Result<()> {
-        let d3d = create_d3d()?;
-        let dxgi: IDXGIDevice = d3d.cast()?;
-        // SAFETY: plain interface queries on live objects.
-        let factory: IDXGIFactory2 = unsafe { dxgi.GetAdapter()?.GetParent()? };
-        let desc = DXGI_SWAP_CHAIN_DESC1 {
-            Width: w,
-            Height: h,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            Stereo: false.into(),
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-            BufferCount: 2,
-            Scaling: DXGI_SCALING_STRETCH,
-            SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-            AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
-            Flags: 0,
-        };
-        // SAFETY: `desc` outlives the call; the device is the one the factory came from.
-        let swap = unsafe { factory.CreateSwapChainForComposition(&d3d, &desc, None)? };
-        // SAFETY: `dxgi` is a valid DXGI device from the same factory as `gfx.d2d1`.
-        let d2d_dev = unsafe { self.gfx.d2d1.CreateDevice(&dxgi)? };
-        // SAFETY: plain call on the device.
-        let dc = unsafe { d2d_dev.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)? };
-        // SAFETY: DirectComposition objects for this window; each call returns a COM object.
-        let (dcomp, target, visual) = unsafe {
-            let dcomp: IDCompositionDevice = DCompositionCreateDevice(&dxgi)?;
-            let target = dcomp.CreateTargetForHwnd(self.hwnd.get(), true)?;
-            let visual = dcomp.CreateVisual()?;
-            visual.SetContent(&swap)?;
-            target.SetRoot(&visual)?;
-            dcomp.Commit()?;
-            (dcomp, target, visual)
-        };
-        *self.gpu.borrow_mut() = Some(Gpu {
-            swap,
-            dc,
-            _d3d: d3d,
-            _dcomp: dcomp,
-            _target: target,
-            _visual: visual,
-        });
-        Ok(())
-    }
-
     fn resize(&self, w: i32, h: i32) -> Result<()> {
-        if let Some(g) = self.gpu.borrow().as_ref() {
-            // SAFETY: the target bitmap is released first, as ResizeBuffers requires.
-            unsafe {
-                g.dc.SetTarget(None);
-                g.swap.ResizeBuffers(
-                    0,
-                    w as u32,
-                    h as u32,
-                    DXGI_FORMAT_B8G8R8A8_UNORM,
-                    windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_FLAG(0),
-                )?;
-                SetWindowPos(
-                    self.hwnd.get(),
-                    None,
-                    0,
-                    0,
-                    w,
-                    h,
-                    SWP_NOACTIVATE
-                        | SWP_NOZORDER
-                        | windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE,
-                )?;
-            }
+        // SAFETY: our own window, resized in place.
+        unsafe {
+            SetWindowPos(
+                self.hwnd.get(),
+                None,
+                0,
+                0,
+                w,
+                h,
+                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE,
+            )
         }
-        Ok(())
     }
 
-    /// Draws the current state into the swap chain and presents it.
+    /// Draws the current state into the surface (made or remade at the layout's pixel size) and
+    /// asks for a repaint.
     fn draw(&self) -> Result<()> {
-        let gpu = self.gpu.borrow();
-        let g = gpu.as_ref().ok_or_else(|| Error::from(E_FAIL))?;
-        // SAFETY: buffer 0 of a flip-model swap chain is always the current back buffer.
-        let surface: IDXGISurface = unsafe { g.swap.GetBuffer(0)? };
-        let props = D2D1_BITMAP_PROPERTIES1 {
-            pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-            },
-            dpiX: 96.0,
-            dpiY: 96.0,
-            bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-            colorContext: std::mem::ManuallyDrop::new(None),
-        };
-        // SAFETY: `props` outlives the call; the surface is the swap chain's buffer.
-        let bitmap = unsafe { g.dc.CreateBitmapFromDxgiSurface(&surface, Some(&props))? };
-        // SAFETY: the bitmap was created for this context.
-        unsafe { g.dc.SetTarget(&bitmap) };
-        let rt: ID2D1RenderTarget = g.dc.cast()?;
-        let canvas = Canvas::new(&self.gfx, rt, self.scale.get())?;
+        let scale = self.scale.get();
         let state = self.state.borrow();
         let layout = self.layout.borrow();
-        canvas.begin();
-        let painted = paint_flyout(
-            &canvas,
-            &state,
-            &layout,
-            PaintOptions {
-                solid_panel: !self.backdrop.get(),
-                clear: None,
-                hover: self.hover.get(),
-            },
-        );
-        canvas.end()?;
-        painted?;
-        // SAFETY: release the target before presenting so the buffer can rotate.
-        unsafe {
-            g.dc.SetTarget(None);
-            g.swap.Present(1, DXGI_PRESENT(0)).ok()?;
+        let (w, h) = size_px(layout.width, layout.height, scale);
+        let (w, h) = (w as u32, h as u32);
+        let mut slot = self.surface.borrow_mut();
+        if slot.as_ref().is_none_or(|s| (s.width, s.height) != (w, h)) {
+            // The old DIB goes before the new one is made, so the two never coexist.
+            *slot = None;
+            *slot = Some(Surface::new(w, h)?);
         }
+        let surface = slot.as_mut().ok_or_else(|| Error::from(E_FAIL))?;
+        render_offscreen_into(&self.gfx, w, h, scale, surface.pixels(), |c| {
+            paint_flyout(
+                c,
+                &state,
+                &layout,
+                PaintOptions {
+                    solid_panel: !self.backdrop.get(),
+                    clear: None,
+                    hover: self.hover.get(),
+                },
+            )
+        })?;
+        // SAFETY: our own window; the whole client area is repainted from the surface.
+        let _ = unsafe { InvalidateRect(Some(self.hwnd.get()), None, false) };
         Ok(())
+    }
+
+    /// `WM_PAINT`: copies the surface, alpha included, to the window.
+    fn paint(&self, hwnd: HWND) {
+        let mut ps = PAINTSTRUCT::default();
+        // SAFETY: a Begin/EndPaint pair on our own window; the surface's DC is valid while borrowed.
+        unsafe {
+            let hdc = BeginPaint(hwnd, &mut ps);
+            if let Ok(slot) = self.surface.try_borrow()
+                && let Some(s) = slot.as_ref()
+            {
+                let _ = BitBlt(
+                    hdc,
+                    0,
+                    0,
+                    s.width as i32,
+                    s.height as i32,
+                    Some(s.dc),
+                    0,
+                    0,
+                    SRCCOPY,
+                );
+            }
+            let _ = EndPaint(hwnd, &ps);
+        }
     }
 
     fn redraw_quietly(&self) {
@@ -493,30 +512,6 @@ impl Inner {
         let s = self.scale.get();
         self.layout.borrow().hit(x_px as f32 / s, y_px as f32 / s)
     }
-}
-
-fn create_d3d() -> Result<ID3D11Device> {
-    for driver in [D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP] {
-        let mut dev = None;
-        // SAFETY: `dev` is a valid out pointer; no adapter, no feature level list.
-        let r = unsafe {
-            D3D11CreateDevice(
-                None,
-                driver,
-                HMODULE::default(),
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                None,
-                D3D11_SDK_VERSION,
-                Some(&mut dev),
-                None,
-                None,
-            )
-        };
-        if let (true, Some(d)) = (r.is_ok(), dev) {
-            return Ok(d);
-        }
-    }
-    Err(Error::from(E_FAIL))
 }
 
 /// # Safety
@@ -540,6 +535,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     let inner = unsafe { &*ptr };
     match msg {
         WM_ERASEBKGND => return LRESULT(1),
+        WM_PAINT => {
+            inner.paint(hwnd);
+            return LRESULT(0);
+        }
         WM_ACTIVATE
             if (wparam.0 & 0xffff) as u32 == WA_INACTIVE && inner.hide_on_deactivate.get() =>
         {
@@ -596,8 +595,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             return LRESULT(0);
         }
         WM_DESTROY => {
-            // Release the graphics before the window goes away.
-            if let Ok(mut g) = inner.gpu.try_borrow_mut() {
+            // Release the pixels before the window goes away.
+            if let Ok(mut g) = inner.surface.try_borrow_mut() {
                 g.take();
             }
             let mut cb =
@@ -706,7 +705,7 @@ mod tests {
             "no hidden window is kept alive"
         );
         assert!(
-            f.inner.gpu.borrow().is_none(),
+            f.inner.surface.borrow().is_none(),
             "graphics are released with the window"
         );
     }

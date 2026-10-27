@@ -2,6 +2,7 @@
 //! JuiceBar's Windows drawing crate: the tray mark and the flyout.
 //! See `spec/design/DESIGN.md`. Pure parts (model, layout, path parsing) have no Win32 in them.
 
+pub mod diag;
 pub mod draw;
 pub mod flyout;
 pub mod gfx;
