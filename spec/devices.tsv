@@ -1,11 +1,11 @@
 # JuiceBar device catalog, read by both apps' cores (spec/PROVIDERS.md, spec/estimator.md).
 # One row per thing a provider recognizes. Columns are tab-separated; "-" means none or unknown.
 # provider     the provider id
-# match        receiver (USB product id of a receiver), dongle (USB product id of a device's own dongle), wpid (wireless product id a receiver reports for a paired device), usb (USB product id of the device itself on its cable)
+# match        receiver (USB product id of a receiver), dongle (USB product id of a device's own dongle), wpid (wireless product id a receiver reports for a paired device), usb (USB product id of the device itself on its cable); for game-controllers the vendor, since pads of two vendors share the provider: sony (product id under vendor 054C, USB or Bluetooth), microsoft (product id under vendor 045E, USB or Bluetooth)
 # id           hexadecimal, four digits
 # model        the name shown when the device does not report one
 # kind         mouse, keyboard, headset, earbuds, gamepad, other
-# battery      the battery source measured on the device: hidpp-0x1000, hidpp-0x1001 (voltage), hidpp-0x1004 (unified, percent), hidpp-0x1f20 (ADC, voltage)
+# battery      the battery source measured on the device: hidpp-0x1000, hidpp-0x1001 (voltage), hidpp-0x1004 (unified, percent), hidpp-0x1f20 (ADC, voltage); for game-controllers hid-ds5 (one DualSense input report sampled, percent in steps of ten), wgi (Windows.Gaming.Input battery report, else XInput levels)
 # curve        the voltage-to-percent curve id in spec/curves.tsv, or "-" when the device gives a percent
 # use_h        rated hours of use, lighting off (Logitech's figure); use_h_rgb the same with lighting on; charge_h rated hours to charge
 # source       where the ratings and ids come from (docs/research/ file and section)
@@ -18,3 +18,21 @@ logitech-hidpp	dongle	0AB5	G733	headset	hidpp-0x1f20	g733	29	20	-	brand ids: Hea
 logitech-hidpp	dongle	0AFE	G733	headset	hidpp-0x1f20	g733	29	20	-	probe-windows.md (measured 26/10/2026)
 logitech-hidpp	dongle	0B1F	G733	headset	hidpp-0x1f20	g733	29	20	-	HeadsetControl facts in hidpp-and-lighting.md
 logitech-hidpp	usb	C356	G915 X LIGHTSPEED	keyboard	hidpp-0x1004	-	800	36	-	probe-windows.md (the keyboard on its charging cable, measured 26/10/2026); same device as wpid 40B5
+game-controllers	sony	0CE6	DualSense	gamepad	hid-ds5	-	-	-	-	docs/research/controllers.md section 1a (SDL usb_ids.h USB_PRODUCT_SONY_DS5)
+game-controllers	sony	0DF2	DualSense Edge	gamepad	hid-ds5	-	-	-	-	docs/research/controllers.md section 1a (USB_PRODUCT_SONY_DS5_EDGE)
+game-controllers	microsoft	028E	Xbox 360 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX360_WIRED_CONTROLLER; docs/research/controllers.md section 2
+game-controllers	microsoft	02A1	Xbox 360 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX360_XUSB_CONTROLLER (XUSB driver software PID)
+game-controllers	microsoft	02E3	Xbox Elite Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ELITE_SERIES_1
+game-controllers	microsoft	0B00	Xbox Elite Series 2 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ELITE_SERIES_2
+game-controllers	microsoft	0B05	Xbox Elite Series 2 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ELITE_SERIES_2_BLUETOOTH
+game-controllers	microsoft	0B22	Xbox Elite Series 2 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ELITE_SERIES_2_BLE
+game-controllers	microsoft	02EA	Xbox One S Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_S
+game-controllers	microsoft	02E0	Xbox One S Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_S_REV1_BLUETOOTH
+game-controllers	microsoft	02FD	Xbox One S Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_S_REV2_BLUETOOTH
+game-controllers	microsoft	0B20	Xbox One S Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_S_REV2_BLE
+game-controllers	microsoft	0B12	Xbox Series Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_SERIES_X
+game-controllers	microsoft	0B13	Xbox Series Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_SERIES_X_BLE
+game-controllers	microsoft	0B0A	Xbox Adaptive Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ADAPTIVE
+game-controllers	microsoft	0B0C	Xbox Adaptive Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ADAPTIVE_BLUETOOTH
+game-controllers	microsoft	0B21	Xbox Adaptive Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ADAPTIVE_BLE
+game-controllers	microsoft	02FF	Xbox One Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_XBOXGIP_CONTROLLER (XBOXGIP driver software PID)

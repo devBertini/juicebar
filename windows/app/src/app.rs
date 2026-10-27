@@ -30,7 +30,7 @@ use windows::core::{PCWSTR, Result, w};
 
 use juicebar_core::snapshot::Snapshot;
 use juicebar_core::strings::Lang;
-use juicebar_core::types::DeviceKey;
+use juicebar_core::types::{Action, DeviceKey};
 use juicebar_hid::Transport;
 use juicebar_ui::flyout::{Flyout, Handlers};
 use juicebar_ui::layout::{FlyoutHit, PxRect};
@@ -38,6 +38,7 @@ use juicebar_ui::model::{IconState, UiState};
 use juicebar_ui::system;
 
 use crate::args::Args;
+use crate::controllers::Controllers;
 use crate::files::DataDir;
 use crate::live::{LightChange, Live, StartConfig};
 use crate::menu::{self, Command};
@@ -65,6 +66,8 @@ const HOTKEY_TEXT: &str = "Ctrl+Alt+B";
 const TIMER_WAKE: usize = 1;
 /// `--seconds N`: quit by itself (tests and captures only).
 const TIMER_QUIT: usize = 2;
+/// The game-controller reads: armed only while a pad is present, for the earliest read due.
+const TIMER_PADS: usize = 3;
 
 /// A tray click that follows the flyout's closing by less than this is the click that closed it.
 const REOPEN_GUARD: Duration = Duration::from_millis(500);
@@ -163,10 +166,13 @@ pub struct App {
     msg_taskbar: u32,
     /// Posted by the transport's waker: events are waiting in `drain`.
     msg_hid: u32,
+    /// Posted by the game-controller provider: arrivals, removals and finished reads are waiting.
+    msg_pads: u32,
     start: Instant,
     data: Option<DataDir>,
     settings: RefCell<Settings>,
     transport: RefCell<Option<Rc<Transport>>>,
+    pads: RefCell<Option<Controllers>>,
     /// The live source has flushed and said good-bye to its devices (quit runs once).
     live_closed: Cell<bool>,
     /// The first snapshot always reaches the tray; later ones only when they differ.
@@ -215,6 +221,8 @@ impl App {
                 RegisterWindowMessageW(w!("JuiceBar.HidEvents")),
             )
         };
+        // SAFETY: registering a message by name.
+        let msg_pads = unsafe { RegisterWindowMessageW(w!("JuiceBar.PadEvents")) };
         App {
             hwnd: Cell::new(HWND::default()),
             exe: std::env::current_exe().unwrap_or_default(),
@@ -222,11 +230,13 @@ impl App {
             msg_open: single::open_message(user),
             msg_taskbar,
             msg_hid,
+            msg_pads,
             start: Instant::now(),
             data,
             rgb_economy: Cell::new(settings.rgb_economy),
             settings: RefCell::new(settings),
             transport: RefCell::new(None),
+            pads: RefCell::new(None),
             live_closed: Cell::new(false),
             applied_once: Cell::new(false),
             tray: RefCell::new(Tray::new(HWND::default(), WM_TRAY)),
@@ -359,6 +369,45 @@ impl App {
         };
         let live = Live::start(host, histories, cfg, winhost::core_now(self.start));
         *self.source.borrow_mut() = Source::Live(Box::new(live));
+        *self.pads.borrow_mut() = Some(Controllers::start(hwnd, self.msg_pads));
+    }
+
+    /// The game-controller provider has something: its events reach the live source like the Logitech provider's.
+    fn on_pads(&self) {
+        let now = winhost::core_now(self.start);
+        let events = match self.pads.borrow_mut().as_mut() {
+            Some(pads) => pads.run(now.mono, now.wall),
+            None => return,
+        };
+        if !events.is_empty() {
+            if let Some(live) = self.source.borrow_mut().live_mut() {
+                live.execute(events.into_iter().map(Action::Emit).collect(), now);
+            }
+            self.after_live(false);
+        }
+        self.arm_pads();
+    }
+
+    /// One timer for the earliest pad read; none while no read is waiting.
+    fn arm_pads(&self) {
+        let due = self.pads.borrow().as_ref().and_then(Controllers::next_due);
+        // SAFETY: a timer on our own window; the same id replaces the previous one.
+        unsafe {
+            match due {
+                Some(at) => {
+                    let ms = ((at - winhost::core_now(self.start).mono) * 1000.0).ceil();
+                    SetTimer(
+                        Some(self.hwnd.get()),
+                        TIMER_PADS,
+                        ms.clamp(1.0, 2_000_000_000.0) as u32,
+                        None,
+                    );
+                }
+                None => {
+                    let _ = KillTimer(Some(self.hwnd.get()), TIMER_PADS);
+                }
+            }
+        }
     }
 
     /// The transport has events waiting: hand each to the provider.
@@ -703,6 +752,7 @@ impl App {
         unsafe {
             let _ = KillTimer(Some(hwnd), TIMER_WAKE);
             let _ = KillTimer(Some(hwnd), TIMER_QUIT);
+            let _ = KillTimer(Some(hwnd), TIMER_PADS);
             let _ = UnregisterHotKey(Some(hwnd), HOTKEY_ID);
         }
         *self.flyout.borrow_mut() = None;
@@ -714,6 +764,9 @@ impl App {
         if let Some(t) = self.transport.borrow_mut().take() {
             t.stop();
         }
+        if let Some(mut pads) = self.pads.borrow_mut().take() {
+            pads.stop();
+        }
     }
 
     fn dispatch(&self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
@@ -723,6 +776,10 @@ impl App {
         }
         if msg == self.msg_hid {
             self.on_hid();
+            return Some(LRESULT(0));
+        }
+        if msg == self.msg_pads {
+            self.on_pads();
             return Some(LRESULT(0));
         }
         if msg == self.msg_taskbar {
@@ -749,6 +806,7 @@ impl App {
             }
             WM_TIMER => match wparam.0 {
                 TIMER_WAKE => self.on_wake(),
+                TIMER_PADS => self.on_pads(),
                 TIMER_QUIT => {
                     // SAFETY: destroying our own window ends the loop through WM_DESTROY.
                     unsafe {
