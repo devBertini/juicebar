@@ -629,7 +629,7 @@ mod tests {
         assert_eq!(p.row(row::LICENSE).unwrap().label, "Licença GPL-3.0");
         assert_eq!(
             p.row(row::PRIVACY).unwrap().label,
-            "Sem rede, sem telemetria: tudo fica neste computador"
+            "Nada sai deste computador: sem internet, sem telemetria"
         );
         assert_eq!(
             action(&p, row::GITHUB, PART_ROW),
