@@ -16,6 +16,7 @@ Each provider declares its `capabilities`: `pushesPresence` (the OS or the devic
 
 ## Rules every provider follows
 - **Event-driven, never a loop.** Presence comes from OS notifications (device arrival and removal, a receiver's connection notification, a controller added or removed); battery from the device's own events where it sends them, otherwise from `refresh` at the pace the registry sets (never below `minRefreshSeconds`; no read at all while the device is offline). No thread spins, no timer ticks while nothing changes.
+- **Devices that stream input are sampled, never followed.** A game pad sends input reports hundreds of times a second; its provider opens it, takes one report (or asks the OS for its battery), and closes it, at its refresh interval and on its arrival, so JuiceBar never wakes for its input.
 - **Read only.** A provider never writes a device setting, except a feature the owner turned on in the app (the RGB economy), through its own explicit call, never as a side effect of reading.
 - **Coexists with vendor software.** Shared opens only (never exclusive), its own HID++ software ID, answers matched to its own requests; other programs' traffic ignored.
 - **Releases what it holds** on `disappeared`, on sleep and on quit.
@@ -28,7 +29,7 @@ Each provider declares its `capabilities`: `pushesPresence` (the OS or the devic
 |---|---|---|---|---|
 | `logitech-hidpp` | Logitech devices over HID++: LIGHTSPEED receivers, headset dongles, Bluetooth | HID API (shared open, overlapped reads), `CM_Register_Notification` | IOHIDManager | v1, the owner's G703, G733 and G915 X |
 | `os-bluetooth` | Bluetooth devices of any brand that report battery to the system | to be measured (W6): the GATT Battery Service, or the property Windows Settings shows | to be measured (M8): `IORegistry` for Apple accessories, Core Bluetooth Battery Service for others | v1 if the probes find a read-only path |
-| `game-controllers` | Xbox, PlayStation, Switch Pro and other controllers | `Windows.Gaming.Input` battery report | `GameController` (`GCController.battery`) | v1 |
+| `game-controllers` | Xbox, PlayStation, Switch Pro and other controllers | Xbox: `Windows.Gaming.Input` battery report (exact), else `XInputGetBatteryInformation` (coarse); DualSense: one HID input report sampled (USB report 0x01, Bluetooth 0x31; `docs/research/controllers.md`) | `GameController` (`GCController.battery`) | v1, built from documented facts; proven when the owner connects an Xbox controller or a DualSense |
 | others (`steelseries-arctis`, `hyperx-cloud`, `razer`, `corsair-icue`, ...) | other brands' own protocols | | | a contributor's provider, shipped only when proven on a real device (`docs/CONTRIBUTING.md`) |
 
 Which of these a device appears under is decided once: when two providers see the same device (a Logitech mouse over Bluetooth that the system also reports), the more exact one wins (`logitech-hidpp` over `os-bluetooth`), by connection and name.
