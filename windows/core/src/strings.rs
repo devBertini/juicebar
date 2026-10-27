@@ -106,7 +106,12 @@ ids! {
     MENU_DEVICES = "menu_devices",
     MENU_QUIT = "menu_quit",
     EMPTY_TITLE = "empty_title",
-    EMPTY_HINT = "empty_hint"
+    EMPTY_HINT = "empty_hint",
+    CHART_LAST_7_DAYS = "chart_last_7_days",
+    CHART_FORECAST = "chart_forecast",
+    STAT_TODAY = "stat_today",
+    STAT_OF_USE = "stat_of_use",
+    STAT_HEALTH = "stat_health"
 }
 
 type Table = HashMap<&'static str, (&'static str, &'static str)>;

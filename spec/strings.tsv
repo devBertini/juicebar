@@ -65,3 +65,8 @@ menu_devices	Devices	Dispositivos
 menu_quit	Quit	Sair
 empty_title	No devices yet	Nenhum dispositivo ainda
 empty_hint	Turn on a compatible mouse, keyboard or headset	Ligue um mouse, teclado ou fone compatível
+chart_last_7_days	Last 7 days	Últimos 7 dias
+chart_forecast	forecast	previsão
+stat_today	Today	Hoje
+stat_of_use	of use	de uso
+stat_health	Battery health	Saúde da bateria

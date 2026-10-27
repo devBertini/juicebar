@@ -5,7 +5,7 @@ use juicebar_core::estimator::LOW_PERCENT;
 use juicebar_core::snapshot::{self, DeviceView, Snapshot};
 use juicebar_core::strings::{self, Lang, id};
 use juicebar_core::types::{DeviceKey, Kind};
-use juicebar_ui::model::{Glyph, IconState, Rgb, Theme, UiDevice, UiState};
+use juicebar_ui::model::{Glyph, IconState, Rgb, Theme, UiDevice, UiLabels, UiState};
 
 /// Everything besides the snapshot that the flyout depends on.
 pub struct ViewInput<'a> {
@@ -139,6 +139,22 @@ pub fn ui_state(v: &ViewInput<'_>) -> UiState {
         low_threshold: LOW_PERCENT as u8,
         day_labels: day_labels(v.now, v.utc_offset, v.lang),
         empty_text: v.empty_text.to_string(),
+        labels: labels(v.lang),
+    }
+}
+
+/// The flyout's static labels in the app's language.
+pub fn labels(lang: Lang) -> UiLabels {
+    let s = |key| strings::get(lang, key).to_string();
+    UiLabels {
+        last_7_days: s(strings::id::CHART_LAST_7_DAYS),
+        forecast: s(strings::id::CHART_FORECAST),
+        today: s(strings::id::STAT_TODAY),
+        of_use: s(strings::id::STAT_OF_USE),
+        battery_health: s(strings::id::STAT_HEALTH),
+        learning: s(strings::id::HEALTH_LEARNING),
+        off_devices: s(strings::id::SECTION_OFF),
+        rgb_economy: s(strings::id::RGB_SAVER),
     }
 }
 
@@ -153,6 +169,18 @@ pub fn default_expanded(s: &Snapshot) -> Option<DeviceKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_flyout_labels_follow_the_language() {
+        let en = labels(Lang::En);
+        assert_eq!(en.last_7_days, "Last 7 days");
+        assert_eq!(en.off_devices, "Off");
+        assert_eq!(en.rgb_economy, "RGB saver");
+        let pt = labels(Lang::PtBr);
+        assert_eq!(pt.last_7_days, "Últimos 7 dias");
+        assert_eq!(pt.battery_health, "Saúde da bateria");
+        assert_eq!(pt.of_use, "de uso");
+    }
     use crate::source::{Clock, DemoPhase, demo_snapshot};
 
     fn input<'a>(s: &'a Snapshot, lang: Lang, exp: Option<&'a DeviceKey>) -> ViewInput<'a> {
