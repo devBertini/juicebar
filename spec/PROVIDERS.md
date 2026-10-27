@@ -21,7 +21,7 @@ Each provider declares its `capabilities`: `pushesPresence` (the OS or the devic
 - **Coexists with vendor software.** Shared opens only (never exclusive), its own HID++ software ID, answers matched to its own requests; other programs' traffic ignored.
 - **Releases what it holds** on `disappeared`, on sleep and on quit.
 - **Identity without secrets.** `key` = provider id + the fields that keep a device apart (a receiver's product id and slot, a wireless product id, a Bluetooth address), hashed (SHA-256, first 16 hex characters) when any of them is a serial number or an address, so no store, log, trace or fixture holds one in the clear.
-- **No network, no telemetry.**
+- **Nothing leaves the computer: no internet, no telemetry.** The only connection a provider may open is to a local service on the same computer (127.0.0.1), read only.
 
 ## Providers
 

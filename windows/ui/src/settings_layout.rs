@@ -567,7 +567,7 @@ mod tests {
                             "devBertini",
                         ),
                         SettingsRow::link(6, "Código no GitHub", ""),
-                        SettingsRow::note(7, "Sem rede, sem telemetria"),
+                        SettingsRow::note(7, "Sem internet, sem telemetria"),
                     ],
                 ),
             ],

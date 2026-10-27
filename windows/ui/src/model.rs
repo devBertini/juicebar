@@ -435,7 +435,7 @@ pub fn sample_settings_page() -> UiSettings {
                     SettingsRow::link(14, "Código no GitHub", ""),
                     SettingsRow::link(15, "Licença GPL-3.0", "")
                         .with_detail("Software livre: use, estude, compartilhe e altere"),
-                    SettingsRow::note(16, "Sem rede, sem telemetria: tudo fica neste computador"),
+                    SettingsRow::note(16, "Nada sai deste computador: sem internet, sem telemetria"),
                 ],
             ),
         ],
