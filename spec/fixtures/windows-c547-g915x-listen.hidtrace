@@ -1,0 +1,13 @@
+0 # passive listen of 120 s on receiver C547 while the owner turned the device off and on and plugged a charging cable (26/10/2026); only the receiver's connection notifications, the battery events the device pushed (software ID 0) and HID++ 1.0 notifications are kept: G HUB's own traffic, which includes DeviceInfo answers, is removed
+10679 < 1001411161b540
+10679 # HID++ 1.0 notification 0x41 device connection: device 1, link LOST (bit 0x40 set), kind keyboard, wireless pid 40b5 [MI_02 COL01]
+26757 < 10014111a1b540
+26757 # HID++ 1.0 notification 0x41 device connection: device 1, link established, kind keyboard, wireless pid 40b5 [MI_02 COL01]
+26759 < 1101080032040000000000000000000000000000
+26759 # HID++ 2.0 event: device 1, feature index 8, event 0 (feature not a known battery one) [MI_02 COL02]
+29749 < 1101080031040000000000000000000000000000
+29749 # HID++ 2.0 event: device 1, feature index 8, event 0 (feature not a known battery one) [MI_02 COL02]
+59619 < 1101080031040101000000000000000000000000
+59619 # HID++ 2.0 event: device 1, feature index 8, event 0 (feature not a known battery one) [MI_02 COL02]
+60213 < 1001411161b540
+60213 # HID++ 1.0 notification 0x41 device connection: device 1, link LOST (bit 0x40 set), kind keyboard, wireless pid 40b5 [MI_02 COL01]
