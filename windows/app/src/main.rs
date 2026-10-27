@@ -3,6 +3,7 @@
 //! The shell is fed by the real devices through the core (`live`), or by a demo source.
 #![windows_subsystem = "windows"]
 
+mod anim;
 mod app;
 mod args;
 mod files;

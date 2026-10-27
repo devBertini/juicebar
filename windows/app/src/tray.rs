@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
 //! The notification-area icon: `Shell_NotifyIconW` with `NOTIFYICON_VERSION_4`, one icon with
-//! `uID` 1. The mark is re-rendered only when its state, the taskbar theme or the icon size changes.
+//! `uID` 1. The mark is re-rendered only when its look, the taskbar theme or the icon size changes.
+//! The animation (`anim`) puts its own pictures on the icon with `show_frame` and `show_rest`.
 
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi};
@@ -15,9 +16,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Result, w};
 
-use juicebar_ui::icon::render_mark;
+use juicebar_ui::icon::{Frame, IconLook, render_mark};
 use juicebar_ui::layout::PxRect;
-use juicebar_ui::model::IconState;
 
 use crate::notify::Notice;
 
@@ -27,7 +27,7 @@ pub const ICON_ID: u32 = 1;
 /// What decides how the mark looks; the icon is rebuilt only when this changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IconKey {
-    pub state: IconState,
+    pub look: IconLook,
     pub dark_taskbar: bool,
     pub px: u32,
 }
@@ -112,7 +112,7 @@ impl Tray {
 
     /// Adds the icon (or adds it again after Explorer restarted).
     pub fn add(&mut self, key: IconKey, tip: &str) -> Result<()> {
-        let new_icon = render_mark(key.state, key.dark_taskbar, key.px)?;
+        let new_icon = render_mark(key.look, &Frame::STILL, key.dark_taskbar, key.px)?;
         let mut nid = self.data(NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP);
         nid.uCallbackMessage = self.callback;
         nid.hIcon = new_icon;
@@ -164,7 +164,7 @@ impl Tray {
         let mut flags = NIF_TIP | NIF_SHOWTIP;
         let mut new_icon = None;
         if icon_changed {
-            let icon = render_mark(key.state, key.dark_taskbar, key.px)?;
+            let icon = render_mark(key.look, &Frame::STILL, key.dark_taskbar, key.px)?;
             flags |= NIF_ICON;
             new_icon = Some(icon);
         }
@@ -192,6 +192,24 @@ impl Tray {
         }
         self.tip = tip.to_string();
         Ok(())
+    }
+
+    /// Shows `icon`, one of the animation's pictures, on the icon. The animation keeps the picture
+    /// alive; the icon the tray owns is not touched. False when the shell refused it.
+    pub fn show_frame(&mut self, icon: HICON) -> bool {
+        if !self.added {
+            return false;
+        }
+        let mut nid = self.data(NIF_ICON);
+        nid.hIcon = icon;
+        // SAFETY: `nid` is initialised for our own icon; the shell takes its own copy of the picture.
+        unsafe { Shell_NotifyIconW(NIM_MODIFY, &nid) }.as_bool()
+    }
+
+    /// Puts the icon the tray owns (the mark at rest) back after an animation.
+    pub fn show_rest(&mut self) -> bool {
+        let rest = self.icon;
+        !rest.is_invalid() && self.show_frame(rest)
     }
 
     /// Forgets that the icon is in the area (the `TaskbarCreated` message) and adds it again.
@@ -223,11 +241,11 @@ impl Tray {
     }
 
     /// Shows a notice as a balloon (Windows 10 and 11 draw it as a toast), with the mark as its icon.
-    pub fn balloon(&self, notice: &Notice, mark: IconState, dark_ui: bool, px: u32) -> Result<()> {
+    pub fn balloon(&self, notice: &Notice, mark: IconLook, dark_ui: bool, px: u32) -> Result<()> {
         if !self.added {
             return Ok(());
         }
-        let icon = render_mark(mark, dark_ui, px)?;
+        let icon = render_mark(mark, &Frame::STILL, dark_ui, px)?;
         let mut nid = self.data(NIF_INFO);
         fill(&mut nid.szInfoTitle, &notice.title);
         fill(&mut nid.szInfo, &notice.body);

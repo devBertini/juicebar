@@ -33,10 +33,12 @@ use juicebar_core::strings::Lang;
 use juicebar_core::types::DeviceKey;
 use juicebar_hid::Transport;
 use juicebar_ui::flyout::{Flyout, Handlers};
+use juicebar_ui::icon::IconLook;
 use juicebar_ui::layout::{FlyoutHit, PxRect};
-use juicebar_ui::model::{IconState, UiState};
+use juicebar_ui::model::UiState;
 use juicebar_ui::system;
 
+use crate::anim::{self, Anim, TrayHost};
 use crate::args::Args;
 use crate::files::DataDir;
 use crate::live::{Live, StartConfig};
@@ -172,6 +174,8 @@ pub struct App {
     /// The first snapshot always reaches the tray; later ones only when they differ.
     applied_once: Cell<bool>,
     tray: RefCell<Tray>,
+    /// The tray mark's motion: no timer between its runs (`anim`).
+    anim: RefCell<Anim>,
     flyout: RefCell<Option<Flyout>>,
     source: RefCell<Source>,
     snapshot: RefCell<Snapshot>,
@@ -230,6 +234,9 @@ impl App {
             live_closed: Cell::new(false),
             applied_once: Cell::new(false),
             tray: RefCell::new(Tray::new(HWND::default(), WM_TRAY)),
+            anim: RefCell::new(Anim::new(
+                args.anim_every.map(|s| Duration::from_secs(u64::from(s))),
+            )),
             flyout: RefCell::new(None),
             source: RefCell::new(source),
             snapshot: RefCell::new(snapshot),
@@ -258,15 +265,16 @@ impl App {
         let hwnd = self.hwnd.get();
         self.tray.borrow_mut().bind(hwnd);
         // SAFETY: registering a hot key for our own window; failure (taken by another app) is handled.
-        let ok = unsafe {
-            RegisterHotKey(
-                Some(hwnd),
-                HOTKEY_ID,
-                MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-                u32::from(b'B'),
-            )
-        }
-        .is_ok();
+        let ok = !self.args.no_hotkey
+            && unsafe {
+                RegisterHotKey(
+                    Some(hwnd),
+                    HOTKEY_ID,
+                    MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+                    u32::from(b'B'),
+                )
+            }
+            .is_ok();
         self.hotkey_ok.set(ok);
         self.trace(&format!(
             "hotkey {}",
@@ -419,9 +427,9 @@ impl App {
         }
     }
 
-    fn icon_key(&self, state: juicebar_core::snapshot::IconState) -> IconKey {
+    fn icon_key(&self, look: juicebar_core::snapshot::IconLook) -> IconKey {
         IconKey {
-            state: view::icon_state(state),
+            look: view::icon_look(look),
             dark_taskbar: system::taskbar_is_dark(),
             px: tray::small_icon_px(tray::taskbar_dpi()),
         }
@@ -448,11 +456,12 @@ impl App {
             if let Err(e) = t.update(key, &tip) {
                 self.trace(&format!("tray update failed: {e}"));
             }
+            self.anim_key(&mut t, key);
             let dpi = tray::taskbar_dpi();
             let dark_ui = system::app_theme() == juicebar_ui::model::Theme::Dark;
             for n in &notices {
                 self.trace(&format!("notice: {} | {}", n.title, n.body));
-                let shown = t.balloon(n, IconState::Normal, !dark_ui, tray::large_icon_px(dpi));
+                let shown = t.balloon(n, IconLook::default(), !dark_ui, tray::large_icon_px(dpi));
                 self.trace(&format!("balloon ok: {}", shown.is_ok()));
             }
         }
@@ -470,6 +479,62 @@ impl App {
         };
         if let Ok(mut t) = self.tray.try_borrow_mut() {
             let _ = t.update(key, &tip);
+            self.anim_key(&mut t, key);
+        }
+    }
+
+    // ---- the tray mark's motion
+
+    /// The tray shows `key` now: the driver plays what a change of it asks for.
+    fn anim_key(&self, tray: &mut Tray, key: IconKey) {
+        let mut host = TrayHost {
+            hwnd: self.hwnd.get(),
+            tray,
+        };
+        let event = self
+            .anim
+            .borrow_mut()
+            .on_key(&mut host, key, Instant::now());
+        self.trace_anim(event);
+    }
+
+    /// One of the driver's timers fired.
+    fn on_anim_timer(&self, id: usize) {
+        let Ok(mut tray) = self.tray.try_borrow_mut() else {
+            return;
+        };
+        let mut host = TrayHost {
+            hwnd: self.hwnd.get(),
+            tray: &mut tray,
+        };
+        let now = Instant::now();
+        let event = if id == anim::TIMER_FRAME {
+            self.anim.borrow_mut().on_frame(&mut host, now)
+        } else {
+            self.anim.borrow_mut().on_idle(&mut host, now)
+        };
+        self.trace_anim(event);
+    }
+
+    /// The system's settings changed: the animation effects may have been switched.
+    fn on_anim_settings(&self) {
+        let Ok(mut tray) = self.tray.try_borrow_mut() else {
+            return;
+        };
+        let mut host = TrayHost {
+            hwnd: self.hwnd.get(),
+            tray: &mut tray,
+        };
+        let event = self
+            .anim
+            .borrow_mut()
+            .on_settings(&mut host, Instant::now());
+        self.trace_anim(event);
+    }
+
+    fn trace_anim(&self, event: Option<anim::Event>) {
+        if let Some(e) = event {
+            self.trace(&format!("anim {e:?}"));
         }
     }
 
@@ -671,6 +736,10 @@ impl App {
             let _ = KillTimer(Some(hwnd), TIMER_QUIT);
             let _ = UnregisterHotKey(Some(hwnd), HOTKEY_ID);
         }
+        if let Ok(mut t) = self.tray.try_borrow_mut() {
+            let mut host = TrayHost { hwnd, tray: &mut t };
+            self.anim.borrow_mut().stop(&mut host);
+        }
         *self.flyout.borrow_mut() = None;
         // The histories reach their files before the icon goes.
         self.flush_live();
@@ -715,6 +784,7 @@ impl App {
             }
             WM_TIMER => match wparam.0 {
                 TIMER_WAKE => self.on_wake(),
+                anim::TIMER_IDLE | anim::TIMER_FRAME => self.on_anim_timer(wparam.0),
                 TIMER_QUIT => {
                     // SAFETY: destroying our own window ends the loop through WM_DESTROY.
                     unsafe {
@@ -728,6 +798,7 @@ impl App {
                     self.refresh_flyout();
                 }
                 self.refresh_tray();
+                self.on_anim_settings();
             }
             WM_DPICHANGED | WM_DISPLAYCHANGE => self.refresh_tray(),
             WM_ENDSESSION if wparam.0 != 0 => self.shutdown(),

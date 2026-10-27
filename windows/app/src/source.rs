@@ -2,7 +2,9 @@
 //! Where the snapshot comes from: the real devices through the core (`Live`, the default), the demo
 //! devices of `docs/design/harness/sample-state.js` (hand-ported), or "no devices yet".
 
-use juicebar_core::snapshot::{ChartPoint, DeviceView, Forecast, IconState, Snapshot, tooltip};
+use juicebar_core::snapshot::{
+    ChartPoint, DeviceView, Forecast, IconLook, Limits, Snapshot, tooltip,
+};
 use juicebar_core::strings::{self, Lang, id};
 use juicebar_core::types::{DeviceKey, Kind, Now};
 
@@ -130,7 +132,7 @@ impl Source {
 
 pub fn empty_snapshot(lang: Lang) -> Snapshot {
     Snapshot {
-        icon: IconState::Normal,
+        icon: IconLook::default(),
         tooltip: tooltip(&[], lang),
         devices: Vec::new(),
         on_count: 0,
@@ -363,13 +365,9 @@ pub fn demo_snapshot(phase: DemoPhase, clock: &Clock, lang: Lang) -> Snapshot {
     devices.sort_by(|a, b| {
         (!a.on, a.name.to_lowercase(), &a.key).cmp(&(!b.on, b.name.to_lowercase(), &b.key))
     });
-    let icon = if devices.iter().any(|d| d.warning.is_some()) {
-        IconState::Warning
-    } else if devices.iter().any(|d| d.on && d.charging) {
-        IconState::Charging
-    } else {
-        IconState::Normal
-    };
+    // The demo's warnings are the scene's own (a smart warning on the mouse).
+    let smart_alert = devices.iter().any(|d| d.on && d.warning.is_some());
+    let icon = IconLook::of(&devices, smart_alert, Limits::default());
     Snapshot {
         icon,
         tooltip: tooltip(&devices, lang),
@@ -381,6 +379,7 @@ pub fn demo_snapshot(phase: DemoPhase, clock: &Clock, lang: Lang) -> Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use juicebar_core::snapshot::Juice;
 
     const CLOCK: Clock = Clock {
         wall: 1_793_035_800,
@@ -388,13 +387,14 @@ mod tests {
     };
 
     #[test]
-    fn every_scene_gives_the_icon_state_it_is_named_for() {
-        let icon = |p| demo_snapshot(p, &CLOCK, Lang::PtBr).icon;
-        assert_eq!(icon(DemoPhase::Scene), IconState::Warning);
-        assert_eq!(icon(DemoPhase::Normal), IconState::Normal);
-        assert_eq!(icon(DemoPhase::Warning), IconState::Warning);
-        assert_eq!(icon(DemoPhase::Charging), IconState::Charging);
-        assert_eq!(icon(DemoPhase::Full), IconState::Normal);
+    fn every_scene_gives_the_icon_look_it_is_named_for() {
+        let look = |p| demo_snapshot(p, &CLOCK, Lang::PtBr).icon;
+        let is = |juice, charging| IconLook { juice, charging };
+        assert_eq!(look(DemoPhase::Scene), is(Juice::Red, true));
+        assert_eq!(look(DemoPhase::Normal), is(Juice::Purple, false));
+        assert_eq!(look(DemoPhase::Warning), is(Juice::Red, false));
+        assert_eq!(look(DemoPhase::Charging), is(Juice::Purple, true));
+        assert_eq!(look(DemoPhase::Full), is(Juice::Purple, false));
     }
 
     #[test]

@@ -15,12 +15,77 @@ pub const TOOLTIP_LIMIT: usize = 127;
 /// The chart shows this many days.
 pub const CHART_DAYS: i64 = 7;
 
-/// The single bar icon: red while a warning is active, a small bolt while any device charges, otherwise plain.
+/// The colour of the juice in the bar icon.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Juice {
+    /// Every online device with a reading is at or above the high limit.
+    Green,
+    /// Grape juice: nothing to report (also with no device at all).
+    #[default]
+    Purple,
+    /// Some online device is below the low limit, or a smart warning is active.
+    Red,
+}
+
+/// How the single bar icon looks: the juice colour, and whether any device charges (the mark then lets a few
+/// bubbles rise now and then).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct IconLook {
+    pub juice: Juice,
+    pub charging: bool,
+}
+
+/// The battery levels that colour the juice (settings of the app).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IconState {
-    Normal,
-    Warning,
-    Charging,
+pub struct Limits {
+    /// Below this percent a device turns the juice red.
+    pub low: u8,
+    /// At or above this percent on every device turns the juice green.
+    pub high: u8,
+}
+
+impl Limits {
+    pub const DEFAULT_LOW: u8 = 20;
+    pub const DEFAULT_HIGH: u8 = 50;
+
+    /// The limits as set, made consistent: both at most 100 and the high one never under the low one.
+    pub fn new(low: u8, high: u8) -> Limits {
+        let low = low.min(100);
+        Limits {
+            low,
+            high: high.clamp(low, 100),
+        }
+    }
+}
+
+impl Default for Limits {
+    fn default() -> Limits {
+        Limits::new(Limits::DEFAULT_LOW, Limits::DEFAULT_HIGH)
+    }
+}
+
+impl IconLook {
+    /// The look of the shown `devices`. `smart_alert` says that a smart warning is active on an online device.
+    /// Offline devices and devices without a reading count for nothing but the charging flag (which needs an
+    /// online device).
+    pub fn of(devices: &[DeviceView], smart_alert: bool, limits: Limits) -> IconLook {
+        let read: Vec<u8> = devices
+            .iter()
+            .filter(|d| d.on)
+            .filter_map(|d| d.percent)
+            .collect();
+        let juice = if smart_alert || read.iter().any(|&p| p < limits.low) {
+            Juice::Red
+        } else if !read.is_empty() && read.iter().all(|&p| p >= limits.high) {
+            Juice::Green
+        } else {
+            Juice::Purple
+        };
+        IconLook {
+            juice,
+            charging: devices.iter().any(|d| d.on && d.charging),
+        }
+    }
 }
 
 /// A point of the level chart: epoch seconds and percent.
@@ -69,7 +134,7 @@ pub struct DeviceView {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
-    pub icon: IconState,
+    pub icon: IconLook,
     /// One line per device, at most 127 UTF-16 units in total.
     pub tooltip: String,
     /// Devices that are on first, then off devices.
@@ -88,22 +153,34 @@ pub struct DeviceInput<'a> {
 }
 
 impl Snapshot {
-    /// Builds the snapshot at `now` in the language of `lang_tag` (`"pt-BR"`, anything else English).
+    /// Builds the snapshot at `now` in the language of `lang_tag` (`"pt-BR"`, anything else English) with the
+    /// default limits.
     pub fn build(inputs: &[DeviceInput<'_>], now: &Now, lang_tag: &str) -> Snapshot {
+        Snapshot::build_with(inputs, now, lang_tag, Limits::default())
+    }
+
+    /// `build` with the icon's limits as the user set them.
+    pub fn build_with(
+        inputs: &[DeviceInput<'_>],
+        now: &Now,
+        lang_tag: &str,
+        limits: Limits,
+    ) -> Snapshot {
         let lang = Lang::from_tag(lang_tag);
         let wall = now.wall.floor() as i64;
-        let mut devices: Vec<DeviceView> =
-            inputs.iter().map(|d| device_view(d, wall, lang)).collect();
+        let mut smart_alert = false;
+        let mut devices: Vec<DeviceView> = inputs
+            .iter()
+            .map(|d| {
+                let (view, smart) = device_view(d, wall, lang);
+                smart_alert |= smart;
+                view
+            })
+            .collect();
         devices.sort_by(|a, b| {
             (!a.on, a.name.to_lowercase(), &a.key).cmp(&(!b.on, b.name.to_lowercase(), &b.key))
         });
-        let icon = if devices.iter().any(|d| d.warning.is_some()) {
-            IconState::Warning
-        } else if devices.iter().any(|d| d.on && d.charging) {
-            IconState::Charging
-        } else {
-            IconState::Normal
-        };
+        let icon = IconLook::of(&devices, smart_alert, limits);
         let on_count = devices.iter().filter(|d| d.on).count();
         let tooltip = tooltip(&devices, lang);
         Snapshot {
@@ -140,7 +217,8 @@ fn connection_text(c: Connection, lang: Lang) -> String {
     .to_string()
 }
 
-fn device_view(d: &DeviceInput<'_>, now: i64, lang: Lang) -> DeviceView {
+/// The row of one device, and whether its smart warning is active (the icon turns red on it).
+fn device_view(d: &DeviceInput<'_>, now: i64, lang: Lang) -> (DeviceView, bool) {
     let h = d.history;
     let on = h.online();
     let level = h.level();
@@ -194,8 +272,14 @@ fn device_view(d: &DeviceInput<'_>, now: i64, lang: Lang) -> DeviceView {
         status = strings::get(lang, id::STATUS_NO_READING).to_string();
     }
 
+    let smart = if on {
+        smart_warning(h, now, lang)
+    } else {
+        None
+    };
+    let smart_active = smart.is_some();
     let warning = if on {
-        low_warning(h, lang).or_else(|| smart_warning(h, now, lang))
+        low_warning(h, lang).or(smart)
     } else {
         None
     };
@@ -214,7 +298,7 @@ fn device_view(d: &DeviceInput<'_>, now: i64, lang: Lang) -> DeviceView {
         _ => None,
     };
 
-    DeviceView {
+    let view = DeviceView {
         key: d.info.key.clone(),
         name: d.info.name.clone(),
         kind: d.info.kind,
@@ -230,7 +314,8 @@ fn device_view(d: &DeviceInput<'_>, now: i64, lang: Lang) -> DeviceView {
         forecast,
         usage_today: usage_today_text(h, now, lang),
         health: strings::fmt(lang, id::HEALTH_LINE, &[&health_text(h, lang)]),
-    }
+    };
+    (view, smart_active)
 }
 
 /// The measurable readings of the last 7 days, one point per hour (the last reading of the hour).
@@ -497,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn icon_follows_warnings_then_charging() {
+    fn icon_follows_levels_warnings_and_charging_in_a_real_snapshot() {
         let normal = history(Some(T0), &[(T0, 80.0, Charging::Discharging)]);
         let charging = history(Some(T0), &[(T0, 40.0, Charging::Charging)]);
         let low = history(
@@ -523,16 +608,179 @@ mod tests {
                 .collect();
             Snapshot::build(&inputs, &now_at(T0 + 3700), "pt-BR")
         };
-        assert_eq!(build(&[(&a, &normal)]).icon, IconState::Normal);
+        let look = |juice, charging| IconLook { juice, charging };
+        assert_eq!(build(&[(&a, &normal)]).icon, look(Juice::Green, false));
         assert_eq!(
             build(&[(&a, &normal), (&b, &charging)]).icon,
-            IconState::Charging
+            look(Juice::Purple, true),
+            "40 % is between the limits"
         );
         let s = build(&[(&a, &normal), (&b, &charging), (&c, &low)]);
-        assert_eq!(s.icon, IconState::Warning);
+        assert_eq!(s.icon, look(Juice::Red, true));
         let w = s.devices.iter().find(|d| d.name == "c").unwrap();
         assert_eq!(w.warning.as_deref(), Some("dev com 6%"));
-        assert_eq!(build(&[]).icon, IconState::Normal);
+        assert_eq!(build(&[]).icon, look(Juice::Purple, false));
+    }
+
+    #[test]
+    fn limits_come_in_through_build_with() {
+        let h = history(Some(T0), &[(T0, 70.0, Charging::Discharging)]);
+        let i = info("a", "a", Kind::Mouse, Connection::Receiver);
+        let input = [DeviceInput {
+            info: &i,
+            history: &h,
+            readings: &[],
+        }];
+        let at = |low, high| {
+            Snapshot::build_with(&input, &now_at(T0 + 60), "en", Limits::new(low, high)).icon
+        };
+        assert_eq!(at(20, 50).juice, Juice::Green);
+        assert_eq!(
+            at(20, 80).juice,
+            Juice::Purple,
+            "70 % is under a high limit of 80"
+        );
+        assert_eq!(
+            at(75, 90).juice,
+            Juice::Red,
+            "70 % is under a low limit of 75"
+        );
+        let plain = Snapshot::build(&input, &now_at(T0 + 60), "en");
+        assert_eq!(plain.icon, at(20, 50), "build uses the default limits");
+    }
+
+    #[test]
+    fn an_active_smart_warning_turns_a_real_snapshot_red_at_a_middling_level() {
+        // 35 % at 09:00 will not last the day (the estimator's own warning).
+        let h = history(Some(T0), &[(T0, 35.0, Charging::Discharging)]);
+        let i = info("a", "a", Kind::Mouse, Connection::Receiver);
+        let input = [DeviceInput {
+            info: &i,
+            history: &h,
+            readings: &[],
+        }];
+        let s = Snapshot::build(&input, &now_at(T0 + 60), "en");
+        assert!(s.devices[0].warning.is_some());
+        assert_eq!(s.icon.juice, Juice::Red);
+        assert!(
+            s.devices[0].percent.unwrap() >= 20,
+            "not under the low limit"
+        );
+    }
+
+    fn row(on: bool, pct: Option<u8>, charging: bool) -> DeviceView {
+        DeviceView {
+            charging,
+            ..view("d", on, pct, "")
+        }
+    }
+
+    fn juice_of(rows: &[DeviceView]) -> Juice {
+        IconLook::of(rows, false, Limits::default()).juice
+    }
+
+    #[test]
+    fn red_when_any_online_device_is_under_the_low_limit() {
+        assert_eq!(juice_of(&[row(true, Some(19), false)]), Juice::Red);
+        assert_eq!(
+            juice_of(&[row(true, Some(90), false), row(true, Some(5), false)]),
+            Juice::Red,
+            "one low device is enough"
+        );
+        // Equal to the limit is not under it.
+        assert_eq!(juice_of(&[row(true, Some(20), false)]), Juice::Purple);
+        assert_eq!(juice_of(&[row(true, Some(0), false)]), Juice::Red);
+    }
+
+    #[test]
+    fn red_on_a_smart_warning_even_with_a_healthy_level() {
+        let rows = [row(true, Some(80), false)];
+        assert_eq!(
+            IconLook::of(&rows, true, Limits::default()).juice,
+            Juice::Red
+        );
+        assert_eq!(
+            IconLook::of(&rows, false, Limits::default()).juice,
+            Juice::Green
+        );
+    }
+
+    #[test]
+    fn green_only_when_every_online_device_with_a_reading_is_at_or_above_high() {
+        assert_eq!(
+            juice_of(&[row(true, Some(50), false)]),
+            Juice::Green,
+            "equal counts"
+        );
+        assert_eq!(juice_of(&[row(true, Some(49), false)]), Juice::Purple);
+        assert_eq!(
+            juice_of(&[row(true, Some(100), false), row(true, Some(49), false)]),
+            Juice::Purple,
+            "all of them, not any"
+        );
+        assert_eq!(
+            juice_of(&[row(true, Some(100), false), row(true, Some(50), false)]),
+            Juice::Green
+        );
+    }
+
+    #[test]
+    fn no_device_and_no_reading_is_purple() {
+        assert_eq!(juice_of(&[]), Juice::Purple);
+        assert_eq!(juice_of(&[row(true, None, false)]), Juice::Purple);
+        // A device without a reading does not stop the others from deciding.
+        assert_eq!(
+            juice_of(&[row(true, None, false), row(true, Some(80), false)]),
+            Juice::Green
+        );
+    }
+
+    #[test]
+    fn offline_devices_are_ignored() {
+        assert_eq!(juice_of(&[row(false, Some(3), false)]), Juice::Purple);
+        assert_eq!(
+            juice_of(&[row(false, Some(3), false), row(true, Some(90), false)]),
+            Juice::Green,
+            "an off device at 3 % does not turn it red nor stop green"
+        );
+        assert_eq!(
+            juice_of(&[row(false, Some(100), false), row(true, Some(30), false)]),
+            Juice::Purple
+        );
+    }
+
+    #[test]
+    fn charging_needs_an_online_charging_device() {
+        let charging = |rows: &[DeviceView]| IconLook::of(rows, false, Limits::default()).charging;
+        assert!(charging(&[row(true, Some(40), true)]));
+        assert!(!charging(&[row(false, Some(40), true)]));
+        assert!(!charging(&[row(true, Some(40), false)]));
+        assert!(!charging(&[]));
+        // Charging does not change the colour.
+        let look = IconLook::of(&[row(true, Some(10), true)], false, Limits::default());
+        assert_eq!(
+            look,
+            IconLook {
+                juice: Juice::Red,
+                charging: true
+            }
+        );
+    }
+
+    #[test]
+    fn limits_stay_consistent() {
+        assert_eq!(Limits::default(), Limits { low: 20, high: 50 });
+        assert_eq!(Limits::new(60, 40), Limits { low: 60, high: 60 });
+        assert_eq!(
+            Limits::new(120, 200),
+            Limits {
+                low: 100,
+                high: 100
+            }
+        );
+        let tight = Limits::new(30, 30);
+        let rows = [row(true, Some(30), false)];
+        assert_eq!(IconLook::of(&rows, false, tight).juice, Juice::Green);
     }
 
     #[test]

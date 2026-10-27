@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use juicebar_ui::diag;
 use juicebar_ui::flyout::{Flyout, Handlers};
-use juicebar_ui::icon::render_mark;
+use juicebar_ui::icon::{Frame, render_mark};
 use juicebar_ui::layout::PxRect;
 use juicebar_ui::model::{IconState, Theme, UiState};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -46,7 +46,7 @@ fn closing_the_flyout_unloads_the_graphics_and_gives_the_memory_back() {
     juicebar_ui::flyout::ensure_dpi_awareness();
     // The app draws its tray marks first.
     for st in [IconState::Normal, IconState::Warning, IconState::Charging] {
-        let icon = render_mark(st, true, 24).unwrap();
+        let icon = render_mark(st.into(), &Frame::STILL, true, 24).unwrap();
         // SAFETY: the icon was just made and is not used elsewhere.
         unsafe {
             let _ = DestroyIcon(icon);
