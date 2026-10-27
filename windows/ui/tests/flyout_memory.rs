@@ -61,10 +61,16 @@ fn closing_the_flyout_unloads_the_graphics_and_gives_the_memory_back() {
         right: 1024,
         bottom: 1080,
     };
-    // Twice: the second activation is the one that found Direct3D still loaded before.
-    for round in 1..=2 {
+    // Twice the device list (the second activation is the one that found Direct3D still loaded before), then the
+    // Settings page, which is taller and draws more.
+    for (round, settings) in [(1, false), (2, false), (3, true)] {
+        let state = if settings {
+            UiState::sample_settings(Theme::Dark)
+        } else {
+            UiState::sample(Theme::Dark)
+        };
         let f = Flyout::show(
-            UiState::sample(Theme::Dark),
+            state,
             anchor,
             Handlers {
                 on_hit: Box::new(|_| {}),

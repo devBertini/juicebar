@@ -265,7 +265,10 @@ pub struct Anim {
     frames: Option<Frames>,
     active: Option<Active>,
     schedule: Option<Schedule>,
+    /// The system's animation effects are on.
     enabled: bool,
+    /// The user's "Animação do ícone" setting.
+    user_on: bool,
 }
 
 impl Anim {
@@ -279,7 +282,40 @@ impl Anim {
             active: None,
             schedule: None,
             enabled: true,
+            user_on: true,
         }
+    }
+
+    /// The user's setting at start, before the first key (no timer exists yet).
+    pub fn set_user_on(&mut self, on: bool) {
+        self.user_on = on;
+    }
+
+    /// A run may play: the system's effects and the user's setting both allow it.
+    fn allowed(&self) -> bool {
+        self.enabled && self.user_on
+    }
+
+    /// The user turned the icon animation on or off: a run in flight stops and no timer is left waiting; turned on,
+    /// the next run is waited for again.
+    pub fn set_user_enabled(
+        &mut self,
+        host: &mut dyn Host,
+        on: bool,
+        now: Instant,
+    ) -> Option<Event> {
+        if on == self.user_on {
+            return None;
+        }
+        self.user_on = on;
+        if on {
+            self.rearm(host, now);
+            return None;
+        }
+        let was_running = self.active.is_some();
+        self.stop_run(host, true);
+        host.kill_timer(TIMER_IDLE);
+        was_running.then_some(Event::Stopped)
     }
 
     /// The tray has this icon now (called after every tray update). A new juice colour plays the
@@ -327,7 +363,7 @@ impl Anim {
         self.enabled = host.animations_on();
         let due = self.schedule.as_ref().and_then(|s| s.due(now));
         let event = match due {
-            Some(run) if self.enabled && self.active.is_none() => self.start(host, run, now),
+            Some(run) if self.allowed() && self.active.is_none() => self.start(host, run, now),
             _ => None,
         };
         if event.is_none() {
@@ -395,7 +431,7 @@ impl Anim {
     fn start(&mut self, host: &mut dyn Host, run: Run, now: Instant) -> Option<Event> {
         self.enabled = host.animations_on();
         let key = self.key?;
-        if !self.enabled || !self.draw(key, run) {
+        if !self.allowed() || !self.draw(key, run) {
             return None;
         }
         if let Some(s) = &mut self.schedule {
@@ -452,7 +488,7 @@ impl Anim {
     /// Waits for the next run with one long timer; none while a run plays or the animations are off.
     fn rearm(&mut self, host: &mut dyn Host, now: Instant) {
         host.kill_timer(TIMER_IDLE);
-        if self.active.is_some() || !self.enabled {
+        if self.active.is_some() || !self.allowed() {
             return;
         }
         let Some(s) = &self.schedule else { return };
@@ -613,6 +649,52 @@ mod tests {
     }
 
     // ---- the driver
+
+    #[test]
+    fn with_the_icon_animation_off_no_run_starts_and_no_timer_waits() {
+        let (mut a, mut h) = (Anim::new(None), Fake::new());
+        a.set_user_on(false);
+        let t0 = Instant::now();
+        assert_eq!(a.on_key(&mut h, key(Juice::Purple, false), t0), None);
+        assert!(h.live().is_empty(), "off from the start: nothing waits");
+        // A new juice colour and a device starting to charge play nothing.
+        let t = t0 + Duration::from_secs(5);
+        assert_eq!(a.on_key(&mut h, key(Juice::Red, false), t), None);
+        assert_eq!(a.on_key(&mut h, key(Juice::Red, true), t), None);
+        assert!(h.live().is_empty() && h.shown.is_empty());
+        // The long wait firing anyway (a stale timer) starts nothing.
+        assert_eq!(a.on_idle(&mut h, t + 20 * MIN), None);
+        assert!(h.live().is_empty());
+    }
+
+    #[test]
+    fn switching_the_animation_off_stops_the_run_in_flight_and_on_waits_again() {
+        let (mut a, mut h) = (Anim::new(None), Fake::new());
+        let t0 = Instant::now();
+        a.on_key(&mut h, key(Juice::Purple, false), t0);
+        let t = t0 + Duration::from_secs(5);
+        assert_eq!(
+            a.on_key(&mut h, key(Juice::Red, false), t),
+            Some(Event::Started(Run::Slosh))
+        );
+        assert!(h.live().contains(&TIMER_FRAME));
+        let rests = h.rests;
+        assert_eq!(
+            a.set_user_enabled(&mut h, false, t + Duration::from_millis(300)),
+            Some(Event::Stopped)
+        );
+        assert!(
+            h.live().is_empty(),
+            "no frame timer and no wait: {:?}",
+            h.live()
+        );
+        assert_eq!(h.rests, rests + 1, "the mark goes back to rest");
+        // The same setting again changes nothing.
+        assert_eq!(a.set_user_enabled(&mut h, false, t), None);
+        // On again: one long wait, and no run until it fires.
+        assert_eq!(a.set_user_enabled(&mut h, true, t + MIN), None);
+        assert_eq!(h.live(), [TIMER_IDLE]);
+    }
 
     #[test]
     fn the_first_key_plays_nothing_and_waits_for_the_first_run_with_one_timer() {

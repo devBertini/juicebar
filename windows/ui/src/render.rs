@@ -30,8 +30,26 @@ pub fn flyout_size(state: &UiState, scale: f32) -> Result<(u32, u32)> {
 
 /// The flyout as premultiplied BGRA pixels, with a solid panel (no system backdrop offscreen).
 pub fn flyout_pixels(state: &UiState, scale: f32) -> Result<Pixels> {
+    flyout_pixels_at(state, scale, None, 0.0)
+}
+
+/// `flyout_pixels` for a Settings page capped at `max_height` DIPs (the window's) and scrolled by `scroll`.
+pub fn flyout_pixels_at(
+    state: &UiState,
+    scale: f32,
+    max_height: Option<f32>,
+    scroll: f32,
+) -> Result<Pixels> {
     let gfx = Gfx::new()?;
-    let layout = Layout::compute(state, measure_metrics(&gfx, state)?);
+    let mut metrics = measure_metrics(&gfx, state)?;
+    if let Some(h) = max_height {
+        metrics.max_height = h;
+    }
+    let layout = Layout::compute(state, metrics);
+    let scroll = layout
+        .settings
+        .as_ref()
+        .map_or(0.0, |g| g.clamp_scroll(scroll));
     let (w, h) = size_px(layout.width, layout.height, scale);
     render_offscreen(&gfx, w as u32, h as u32, scale, |c| {
         paint_flyout(
@@ -42,6 +60,7 @@ pub fn flyout_pixels(state: &UiState, scale: f32) -> Result<Pixels> {
                 solid_panel: true,
                 clear: Some(backdrop(state.theme)),
                 hover: FlyoutHit::None,
+                scroll,
             },
         )
     })
@@ -54,9 +73,21 @@ pub fn render_flyout_png(
     scale: f32,
     path: &Path,
 ) -> Result<(u32, u32)> {
+    render_flyout_png_at(state, theme, scale, path, None, 0.0)
+}
+
+/// `render_flyout_png` for a capped, scrolled Settings page (`flyout_pixels_at`).
+pub fn render_flyout_png_at(
+    state: &UiState,
+    theme: Theme,
+    scale: f32,
+    path: &Path,
+    max_height: Option<f32>,
+    scroll: f32,
+) -> Result<(u32, u32)> {
     let mut st = state.clone();
     st.theme = theme;
-    let px = flyout_pixels(&st, scale)?;
+    let px = flyout_pixels_at(&st, scale, max_height, scroll)?;
     write_png(path, &px)?;
     Ok((px.width, px.height))
 }

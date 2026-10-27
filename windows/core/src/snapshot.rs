@@ -448,7 +448,7 @@ fn fit(text: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::estimator::{Presence, Reading};
+    use crate::estimator::{NoticeKind, Presence, Reading};
 
     const OFF: i64 = -10_800;
     const T0: i64 = 1_793_016_000; // 2026-10-26 09:00 local, a Monday
@@ -690,6 +690,85 @@ mod tests {
         assert!(
             s.devices[0].percent.unwrap() >= 20,
             "not under the low limit"
+        );
+    }
+
+    #[test]
+    fn the_smart_warning_switch_removes_the_warning_and_the_red() {
+        let mut h = history(Some(T0), &[(T0, 35.0, Charging::Discharging)]);
+        let i = info("a", "a", Kind::Mouse, Connection::Receiver);
+        let build = |h: &DeviceHistory| {
+            let input = [DeviceInput {
+                info: &i,
+                history: h,
+                readings: &[],
+            }];
+            Snapshot::build(&input, &now_at(T0 + 60), "en")
+        };
+        assert_eq!(build(&h).icon.juice, Juice::Red, "on by default");
+        h.set_alerts(10.0, false);
+        let s = build(&h);
+        assert!(s.devices[0].warning.is_none());
+        assert_eq!(s.icon.juice, Juice::Purple, "35 % is between the limits");
+        h.set_alerts(10.0, true);
+        assert_eq!(build(&h).icon.juice, Juice::Red);
+    }
+
+    #[test]
+    fn the_low_level_setting_moves_the_low_battery_warning() {
+        // 12 % while discharging: silent under the default 10 %, a warning once the level is 15 %.
+        let mut h = history(
+            Some(T0),
+            &[
+                (T0, 100.0, Charging::Discharging),
+                (T0 + 60, 12.0, Charging::Discharging),
+            ],
+        );
+        h.set_alerts(10.0, false);
+        let i = info("a", "a", Kind::Mouse, Connection::Receiver);
+        let warn = |h: &DeviceHistory| {
+            let input = [DeviceInput {
+                info: &i,
+                history: h,
+                readings: &[],
+            }];
+            Snapshot::build(&input, &now_at(T0 + 120), "en").devices[0]
+                .warning
+                .clone()
+        };
+        assert_eq!(warn(&h), None);
+        h.set_alerts(15.0, false);
+        assert_eq!(warn(&h).as_deref(), Some("dev at 12%"));
+        // The setting is kept inside its bounds.
+        h.set_alerts(99.0, true);
+        assert_eq!(h.low_percent, 30.0);
+        h.set_alerts(1.0, true);
+        assert_eq!(h.low_percent, 5.0);
+    }
+
+    #[test]
+    fn a_new_low_level_makes_the_notice_fire_at_that_level() {
+        let mut h = DeviceHistory::new("dev", 20.0, 2.5, OFF);
+        h.set_alerts(20.0, false);
+        h.add_presence(Presence {
+            at: T0,
+            online: true,
+        });
+        h.add_reading(Reading::new(
+            T0,
+            Some(40.0),
+            Charging::Discharging,
+            Quality::Exact,
+        ));
+        let n = h.add_reading(Reading::new(
+            T0 + 60,
+            Some(19.0),
+            Charging::Discharging,
+            Quality::Exact,
+        ));
+        assert!(
+            n.iter().any(|n| n.kind == NoticeKind::Low),
+            "{n:?} at 19 % with a 20 % limit"
         );
     }
 

@@ -4,11 +4,12 @@
 //! modules loaded, at idle (tray marks drawn), with the flyout open and after it is destroyed.
 //!
 //! `cargo run --release -p juicebar-ui --example mem_probe -- [--cycles N] [--hold-ms MS]
-//! [--no-marks] [--hold-gfx] [--all-modules]`
+//! [--no-marks] [--hold-gfx] [--all-modules] [--settings]`
 //!
 //! Each phase prints `phase private=<MiB> ws=<MiB> modules=<n> gfx=[...]`, where `gfx` lists the
 //! loaded graphics modules (Direct3D, DXGI, DirectComposition, Direct2D, DirectWrite, WIC, GPU
-//! drivers, overlay hooks), or every module with `--all-modules`. "trimmed" lines follow
+//! drivers, overlay hooks), or every module with `--all-modules`. `--settings` opens the Settings page instead of
+//! the device list. "trimmed" lines follow
 //! `EmptyWorkingSet`, which the app calls after closing the flyout. `--hold-gfx` keeps one
 //! Direct2D factory (and so `d3d11.dll`) loaded for the whole run, which shows what an activation
 //! with Direct3D loaded costs.
@@ -122,7 +123,11 @@ fn main() -> windows::core::Result<()> {
     };
     for i in 1..=cycles {
         let flyout = Flyout::show(
-            UiState::sample(Theme::Dark),
+            if flag("--settings") {
+                UiState::sample_settings(Theme::Dark)
+            } else {
+                UiState::sample(Theme::Dark)
+            },
             anchor,
             Handlers {
                 on_hit: Box::new(|_| {}),

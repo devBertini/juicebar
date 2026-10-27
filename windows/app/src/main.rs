@@ -14,6 +14,7 @@ mod menu;
 mod notify;
 mod runkey;
 mod settings;
+mod settings_page;
 mod single;
 mod source;
 mod tray;

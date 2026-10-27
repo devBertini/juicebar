@@ -13,7 +13,7 @@ use juicebar_core::estimator::{self, Notice as CoreNotice, NoticeKind, Priors, R
 use juicebar_core::lighting::{LightingEvent, SavedLight};
 use juicebar_core::logitech::Logitech;
 use juicebar_core::registry::{Registry, UserList};
-use juicebar_core::snapshot::{DeviceInput, DeviceView, Snapshot};
+use juicebar_core::snapshot::{DeviceInput, DeviceView, Limits, Snapshot};
 use juicebar_core::store::Tracker;
 use juicebar_core::strings::{self, Lang, id};
 use juicebar_core::types::{
@@ -41,10 +41,43 @@ pub trait Host {
     fn log(&mut self, _line: &str) {}
 }
 
+/// What the user decided about the icon's colors and the alerts (the Settings page); live-changeable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Prefs {
+    /// The two levels that color the tray mark's juice.
+    pub limits: Limits,
+    /// A discharging device is told to charge under this percent.
+    pub low_percent: u8,
+    /// The smart warning (its text, its notice and its red) is on.
+    pub smart: bool,
+    /// The "battery full" notice is on.
+    pub full: bool,
+}
+
+impl Default for Prefs {
+    fn default() -> Prefs {
+        Prefs {
+            limits: Limits::default(),
+            low_percent: 10,
+            smart: true,
+            full: true,
+        }
+    }
+}
+
+impl Prefs {
+    /// Hands the alert settings to one device's estimator.
+    fn apply(&self, t: &mut Tracker) {
+        t.history
+            .set_alerts(f64::from(self.low_percent), self.smart);
+    }
+}
+
 /// What the app knows before the first event.
 #[derive(Clone, Debug)]
 pub struct StartConfig {
     pub lang: Lang,
+    pub prefs: Prefs,
     pub rgb_economy: bool,
     /// The devices the user hid in an earlier run.
     pub hidden: Vec<DeviceKey>,
@@ -63,6 +96,7 @@ pub enum LightChange {
 
 /// One entry of the "Dispositivos" menu.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // the Dispositivos section of the Settings page (part 2) lists them
 pub struct DeviceChoice {
     pub key: DeviceKey,
     pub name: String,
@@ -72,6 +106,7 @@ pub struct DeviceChoice {
 pub struct Live<H: Host> {
     host: H,
     lang: Lang,
+    prefs: Prefs,
     rgb_economy: bool,
     provider: Logitech,
     registry: Registry,
@@ -122,6 +157,7 @@ impl<H: Host> Live<H> {
         let mut live = Live {
             host,
             lang: cfg.lang,
+            prefs: cfg.prefs,
             rgb_economy: cfg.rgb_economy,
             provider: Logitech::new(),
             registry: Registry::with_user_list(&list),
@@ -157,7 +193,8 @@ impl<H: Host> Live<H> {
                 i64::from(now.utc_offset),
                 live.lang,
             ) {
-                Ok(tracker) => {
+                Ok(mut tracker) => {
+                    live.prefs.apply(&mut tracker);
                     live.host.replace(&key, &tracker.record.encode_text());
                     live.trackers.insert(key, tracker);
                 }
@@ -243,6 +280,7 @@ impl<H: Host> Live<H> {
     }
 
     /// Shows or hides a device; true when its state changed.
+    #[allow(dead_code)] // as `DeviceChoice`
     pub fn set_shown(&mut self, key: &DeviceKey, shown: bool) -> bool {
         let changed = !self.registry.set_registered(key, shown).is_empty();
         if changed {
@@ -252,11 +290,13 @@ impl<H: Host> Live<H> {
     }
 
     /// Devices the user hid, seen or not, for `settings.txt`.
+    #[allow(dead_code)] // as `DeviceChoice`
     pub fn hidden(&self) -> Vec<DeviceKey> {
         self.registry.user_list().removed
     }
 
     /// Every device seen this run, by name, for the "Dispositivos" menu.
+    #[allow(dead_code)] // as `DeviceChoice`
     pub fn devices(&self) -> Vec<DeviceChoice> {
         let mut out: Vec<DeviceChoice> = self
             .registry
@@ -323,7 +363,31 @@ impl<H: Host> Live<H> {
                 })
             })
             .collect();
-        Snapshot::build(&inputs, now, self.lang.tag())
+        Snapshot::build_with(&inputs, now, self.lang.tag(), self.prefs.limits)
+    }
+
+    /// The user changed the icon's limits or the alerts: every tracker learns them and the next snapshot shows them.
+    pub fn set_prefs(&mut self, prefs: Prefs) {
+        if self.prefs == prefs {
+            return;
+        }
+        self.prefs = prefs;
+        for t in self.trackers.values_mut() {
+            prefs.apply(t);
+        }
+        self.dirty = true;
+    }
+
+    /// The user changed the language: the texts of the snapshot and of the notices follow at once.
+    pub fn set_lang(&mut self, lang: Lang) {
+        if self.lang == lang {
+            return;
+        }
+        self.lang = lang;
+        for t in self.trackers.values_mut() {
+            t.history.lang = lang;
+        }
+        self.dirty = true;
     }
 
     /// The balloons the estimators decided on since the last call, each once, for shown devices only.
@@ -340,6 +404,11 @@ impl<H: Host> Live<H> {
                 .iter()
                 .any(|(k, o)| k == key && o.kind == NoticeKind::Low);
             if n.kind == NoticeKind::Smart && low_too {
+                continue;
+            }
+            if (n.kind == NoticeKind::Full && !self.prefs.full)
+                || (n.kind == NoticeKind::Smart && !self.prefs.smart)
+            {
                 continue;
             }
             let Some(view) = snap.devices.iter().find(|d| &d.key == key) else {
@@ -422,12 +491,13 @@ impl<H: Host> Live<H> {
             t.history.name = info.name.clone();
             return;
         }
-        let tracker = Tracker::for_model(
+        let mut tracker = Tracker::for_model(
             &info.name,
             priors_for_key(&info.key),
             i64::from(now.utc_offset),
             self.lang,
         );
+        self.prefs.apply(&mut tracker);
         self.trackers.insert(info.key.clone(), tracker);
         self.rgb_of(&info.key, now);
     }
@@ -641,6 +711,7 @@ mod tests {
     fn cfg() -> StartConfig {
         StartConfig {
             lang: Lang::PtBr,
+            prefs: Prefs::default(),
             rgb_economy: false,
             hidden: Vec::new(),
             lights: Vec::new(),
@@ -1051,6 +1122,181 @@ mod tests {
         );
         // The charge cycle restarted, but the device is hidden: no balloon.
         assert!(l.take_notices(&at(2000.0)).is_empty());
+    }
+
+    #[test]
+    fn the_full_charge_notice_can_be_switched_off_and_on() {
+        let mut l = live(vec![]);
+        l.set_prefs(Prefs {
+            full: false,
+            ..Prefs::default()
+        });
+        l.execute(
+            vec![
+                appear(&g915(), "G915 X"),
+                online(&g915(), true, 1.0),
+                battery(&g915(), 90.0, Charging::Charging, 2.0),
+                battery(&g915(), 100.0, Charging::Full, 900.0),
+            ],
+            at(900.0),
+        );
+        assert!(l.take_notices(&at(900.0)).is_empty(), "off: no balloon");
+        l.set_prefs(Prefs::default());
+        l.execute(
+            vec![
+                battery(&g915(), 50.0, Charging::Discharging, 1000.0),
+                battery(&g915(), 90.0, Charging::Charging, 1500.0),
+                battery(&g915(), 100.0, Charging::Full, 2000.0),
+            ],
+            at(2000.0),
+        );
+        assert_eq!(
+            l.take_notices(&at(2000.0)).len(),
+            1,
+            "on again: the next one shows"
+        );
+    }
+
+    #[test]
+    fn the_low_level_setting_moves_the_low_battery_balloon() {
+        let mut l = live(vec![]);
+        l.set_prefs(Prefs {
+            low_percent: 25,
+            ..Prefs::default()
+        });
+        l.execute(
+            vec![
+                appear(&g703(), "G703"),
+                online(&g703(), true, 1.0),
+                battery(&g703(), 50.0, Charging::Discharging, 2.0),
+                battery(&g703(), 22.0, Charging::Discharging, 600.0),
+            ],
+            at(600.0),
+        );
+        let n = l.take_notices(&at(600.0));
+        assert!(
+            n.iter().any(|n| n.title == "G703 com 22%"),
+            "{n:?}: 22 % is under the 25 % the user chose"
+        );
+        let mut d = live(vec![]);
+        d.execute(
+            vec![
+                appear(&g703(), "G703"),
+                online(&g703(), true, 1.0),
+                battery(&g703(), 50.0, Charging::Discharging, 2.0),
+                battery(&g703(), 22.0, Charging::Discharging, 600.0),
+            ],
+            at(600.0),
+        );
+        assert!(
+            d.take_notices(&at(600.0))
+                .iter()
+                .all(|n| n.title != "G703 com 22%"),
+            "the default 10 % stays quiet at 22 %"
+        );
+    }
+
+    #[test]
+    fn the_icon_limits_recolor_the_snapshot_at_once() {
+        use juicebar_core::snapshot::Juice;
+        let mut l = live(vec![]);
+        l.execute(
+            vec![
+                appear(&g703(), "G703"),
+                online(&g703(), true, 1.0),
+                battery(&g703(), 60.0, Charging::Discharging, 2.0),
+            ],
+            at(3.0),
+        );
+        assert_eq!(
+            l.snapshot(&at(3.0)).icon.juice,
+            Juice::Green,
+            "60 is over 50"
+        );
+        l.take_dirty();
+        l.set_prefs(Prefs {
+            limits: Limits::new(20, 80),
+            ..Prefs::default()
+        });
+        assert!(l.take_dirty(), "the app takes a new snapshot");
+        assert_eq!(
+            l.snapshot(&at(3.0)).icon.juice,
+            Juice::Purple,
+            "60 is under 80"
+        );
+        l.set_prefs(Prefs {
+            limits: Limits::new(65, 90),
+            ..Prefs::default()
+        });
+        assert_eq!(
+            l.snapshot(&at(3.0)).icon.juice,
+            Juice::Red,
+            "60 is under 65"
+        );
+        l.take_dirty();
+        l.set_prefs(Prefs {
+            limits: Limits::new(65, 90),
+            ..Prefs::default()
+        });
+        assert!(!l.take_dirty(), "the same settings change nothing");
+    }
+
+    #[test]
+    fn the_smart_warning_switch_reaches_the_snapshot() {
+        let mut l = live(vec![]);
+        l.execute(
+            vec![
+                appear(&g703(), "G703"),
+                online(&g703(), true, 1.0),
+                battery(&g703(), 35.0, Charging::Discharging, 2.0),
+            ],
+            at(3.0),
+        );
+        let warned = l.snapshot(&at(3.0)).devices[0].warning.is_some();
+        l.set_prefs(Prefs {
+            smart: false,
+            ..Prefs::default()
+        });
+        let s = l.snapshot(&at(3.0));
+        assert!(s.devices[0].warning.is_none());
+        assert_ne!(s.icon.juice, juicebar_core::snapshot::Juice::Red);
+        l.set_prefs(Prefs::default());
+        assert_eq!(l.snapshot(&at(3.0)).devices[0].warning.is_some(), warned);
+    }
+
+    #[test]
+    fn a_new_language_changes_the_texts_of_the_snapshot_and_of_later_notices() {
+        let mut l = live(vec![]);
+        l.execute(
+            vec![
+                appear(&g915(), "G915 X"),
+                online(&g915(), true, 1.0),
+                battery(&g915(), 90.0, Charging::Charging, 2.0),
+            ],
+            at(3.0),
+        );
+        assert!(
+            l.snapshot(&at(3.0)).devices[0]
+                .connection
+                .contains("Receptor")
+        );
+        l.take_dirty();
+        l.set_lang(Lang::En);
+        assert!(l.take_dirty());
+        assert!(
+            l.snapshot(&at(3.0)).devices[0]
+                .connection
+                .contains("Receiver")
+        );
+        l.execute(
+            vec![battery(&g915(), 100.0, Charging::Full, 900.0)],
+            at(900.0),
+        );
+        let n = l.take_notices(&at(900.0));
+        assert_eq!(n[0].title, "G915 X: battery full");
+        l.take_dirty();
+        l.set_lang(Lang::En);
+        assert!(!l.take_dirty(), "the same language changes nothing");
     }
 
     #[test]

@@ -8,6 +8,10 @@
 //! open card with the chart and the week bars, a device without a reading, the power saver (i) open with the
 //! G HUB notice, and the welcome page.
 //!
+//! `--render-w7c <folder>` writes the Settings page (`w7c-<scene>-<theme>-<scale>.png`): the whole page in one tall
+//! picture, the window as the user sees it (capped to a 720 DIP work area) at the top and scrolled to the end, and
+//! the page with the keyboard focus on a stepper.
+//!
 //! Without `--render` it shows the live flyout above the bottom-right corner of the primary screen
 //! until Esc, a click elsewhere, or `--seconds N`. `--capture <png>` also saves a screenshot of it
 //! (taken from the screen, so the real backdrop shows) 1.5 s after it opens.
@@ -19,7 +23,7 @@ use juicebar_ui::gfx::{Pixels, write_png};
 use juicebar_ui::icon;
 use juicebar_ui::layout::{FlyoutHit, PxRect};
 use juicebar_ui::model::{IconState, Theme, UiState};
-use juicebar_ui::render::render_flyout_png;
+use juicebar_ui::render::{render_flyout_png, render_flyout_png_at};
 use juicebar_ui::system;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -87,6 +91,32 @@ fn render_w7b(dir: &Path) -> windows::core::Result<()> {
             for (scale, tag) in [(1.0f32, "100"), (1.5, "150")] {
                 let f = dir.join(format!("w7b-{name}-{tname}-{tag}.png"));
                 let (w, h) = render_flyout_png(&make(theme), theme, scale, &f)?;
+                println!("{} {w}x{h}", f.display());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The Settings page in both themes at 100 % and 150 %: whole, as the window shows it, scrolled, and focused.
+fn render_w7c(dir: &Path) -> windows::core::Result<()> {
+    std::fs::create_dir_all(dir).expect("create the render folder");
+    for (theme, tname) in [(Theme::Light, "light"), (Theme::Dark, "dark")] {
+        for (scale, tag) in [(1.0f32, "100"), (1.5, "150")] {
+            let page = UiState::sample_settings(theme);
+            let mut focused = page.clone();
+            if let Some(ui) = focused.settings.as_mut() {
+                ui.focus = Some(5);
+            }
+            let scenes: [(&str, &UiState, Option<f32>, f32); 4] = [
+                ("whole", &page, Some(100_000.0), 0.0),
+                ("window", &page, Some(720.0), 0.0),
+                ("scrolled", &page, Some(720.0), 100_000.0),
+                ("focus", &focused, Some(100_000.0), 0.0),
+            ];
+            for (name, state, max, scroll) in scenes {
+                let f = dir.join(format!("w7c-{name}-{tname}-{tag}.png"));
+                let (w, h) = render_flyout_png_at(state, theme, scale, &f, max, scroll)?;
                 println!("{} {w}x{h}", f.display());
             }
         }
@@ -236,6 +266,9 @@ fn main() -> windows::core::Result<()> {
     };
     if let Some(dir) = value("--render") {
         return render(Path::new(dir));
+    }
+    if let Some(dir) = value("--render-w7c") {
+        return render_w7c(Path::new(dir));
     }
     if let Some(dir) = value("--render-w7b") {
         return render_w7b(Path::new(dir));

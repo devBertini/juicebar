@@ -92,10 +92,11 @@ pub enum Source {
 }
 
 impl Source {
-    pub fn snapshot(&self, clock: &Clock, lang: Lang) -> Snapshot {
+    /// The snapshot now; a live source already holds the user's limits, the demo takes them here.
+    pub fn snapshot(&self, clock: &Clock, lang: Lang, limits: Limits) -> Snapshot {
         match self {
             Source::Empty => empty_snapshot(lang),
-            Source::Demo { phase, .. } => demo_snapshot(*phase, clock, lang),
+            Source::Demo { phase, .. } => demo_snapshot_with(*phase, clock, lang, limits),
             Source::Live(live) => live.snapshot(&Now {
                 wall: clock.wall as f64,
                 mono: 0.0,
@@ -343,8 +344,15 @@ fn of_use(lang: Lang, hours: i64) -> String {
     )
 }
 
-/// The sample devices in a scene, built like the core builds them (same strings, same order).
+/// The sample devices in a scene, built like the core builds them (same strings, same order), with the default
+/// icon limits.
+#[cfg(test)]
 pub fn demo_snapshot(phase: DemoPhase, clock: &Clock, lang: Lang) -> Snapshot {
+    demo_snapshot_with(phase, clock, lang, Limits::default())
+}
+
+/// `demo_snapshot` with the icon's limits as the user set them.
+pub fn demo_snapshot_with(phase: DemoPhase, clock: &Clock, lang: Lang, limits: Limits) -> Snapshot {
     let warn = matches!(phase, DemoPhase::Scene | DemoPhase::Warning);
     let charge = matches!(phase, DemoPhase::Scene | DemoPhase::Charging);
 
@@ -382,7 +390,7 @@ pub fn demo_snapshot(phase: DemoPhase, clock: &Clock, lang: Lang) -> Snapshot {
     });
     // The demo's warnings are the scene's own (a smart warning on the mouse).
     let smart_alert = devices.iter().any(|d| d.on && d.warning.is_some());
-    let icon = IconLook::of(&devices, smart_alert, Limits::default());
+    let icon = IconLook::of(&devices, smart_alert, limits);
     Snapshot {
         icon,
         tooltip: tooltip(&devices, lang),
@@ -410,6 +418,34 @@ mod tests {
         assert_eq!(look(DemoPhase::Warning), is(Juice::Red, false));
         assert_eq!(look(DemoPhase::Charging), is(Juice::Purple, true));
         assert_eq!(look(DemoPhase::Full), is(Juice::Purple, false));
+    }
+
+    #[test]
+    fn the_demo_icon_takes_the_users_limits() {
+        let at = |low, high| {
+            demo_snapshot_with(
+                DemoPhase::Normal,
+                &CLOCK,
+                Lang::PtBr,
+                Limits::new(low, high),
+            )
+            .icon
+            .juice
+        };
+        // The normal scene reads 23, 46 and 64 % on the devices that are on.
+        assert_eq!(at(20, 50), Juice::Purple);
+        assert_eq!(at(5, 20), Juice::Green, "all over 20");
+        assert_eq!(at(30, 60), Juice::Red, "23 is under 30");
+        let s = Source::Demo {
+            phase: DemoPhase::Normal,
+            cycle: false,
+        };
+        assert_eq!(
+            s.snapshot(&CLOCK, Lang::PtBr, Limits::new(5, 20))
+                .icon
+                .juice,
+            Juice::Green
+        );
     }
 
     #[test]

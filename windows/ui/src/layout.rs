@@ -6,6 +6,8 @@
 //! every device on its own glass card and the first-open welcome page.
 
 use crate::model::UiState;
+use crate::settings::{EditKey, RowId};
+use crate::settings_layout::{self, SettingsGeom, SettingsHit, SettingsMetrics};
 
 /// A rectangle in DIPs.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -45,6 +47,15 @@ pub enum FlyoutHit {
     RgbSwitch,
     /// The welcome page's button.
     Start,
+    /// The Settings page's back arrow.
+    Back,
+    /// A control of the Settings page: the row's id and the part of the control (`settings::PART_*`).
+    Setting {
+        id: RowId,
+        part: u8,
+    },
+    /// A key typed into a text field of the Settings page that is being edited.
+    Edit(EditKey),
     None,
 }
 
@@ -89,7 +100,7 @@ pub const WELCOME_TEXT_W: f32 = WIDTH - 44.0;
 pub const WELCOME_STEPS_W: f32 = WELCOME_TEXT_W - 28.0;
 
 /// Text sizes the layout cannot know; the painter measures them with DirectWrite.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Metrics {
     pub rgb_label_w: f32,
     pub hotkey_w: f32,
@@ -99,6 +110,10 @@ pub struct Metrics {
     pub welcome_body_h: f32,
     /// Height of the welcome page tray steps wrapped at `WELCOME_STEPS_W`.
     pub welcome_steps_h: f32,
+    /// The text of every row of the Settings page.
+    pub settings: SettingsMetrics,
+    /// The tallest the Settings page may be (the work area minus the flyout's margins), in DIPs.
+    pub max_height: f32,
 }
 
 impl Default for Metrics {
@@ -109,6 +124,8 @@ impl Default for Metrics {
             info_h: 34.0,
             welcome_body_h: 60.0,
             welcome_steps_h: 52.0,
+            settings: SettingsMetrics::default(),
+            max_height: 720.0,
         }
     }
 }
@@ -221,12 +238,17 @@ pub struct Layout {
     pub footer: FooterGeom,
     /// Present instead of the list and the footer on the first open.
     pub welcome: Option<WelcomeGeom>,
+    /// Present instead of the list and the footer on the Settings page.
+    pub settings: Option<SettingsGeom>,
 }
 
 impl Layout {
     pub fn compute(state: &UiState, m: Metrics) -> Layout {
         if state.welcome.is_some() {
-            return Self::welcome_page(m);
+            return Self::welcome_page(&m);
+        }
+        if let Some(ui) = &state.settings {
+            return Self::settings_page(ui, &m);
         }
         let list_x = PAD_X;
         let list_w = WIDTH - 2.0 * PAD_X;
@@ -320,10 +342,27 @@ impl Layout {
             empty,
             footer,
             welcome: None,
+            settings: None,
         }
     }
 
-    fn welcome_page(m: Metrics) -> Layout {
+    fn settings_page(ui: &crate::settings::UiSettings, m: &Metrics) -> Layout {
+        let g = settings_layout::compute(ui, &m.settings, m.max_height);
+        Layout {
+            width: WIDTH,
+            height: g.height,
+            title: Rect::default(),
+            gear: Rect::default(),
+            rows: Vec::new(),
+            separator: None,
+            empty: None,
+            footer: FooterGeom::default(),
+            welcome: None,
+            settings: Some(g),
+        }
+    }
+
+    fn welcome_page(m: &Metrics) -> Layout {
         let x = 22.0;
         let w = WELCOME_TEXT_W;
         let mut y = 28.0;
@@ -360,6 +399,7 @@ impl Layout {
                 credit,
                 button,
             }),
+            settings: None,
         }
     }
 
@@ -424,6 +464,18 @@ impl Layout {
 
     /// What lies under the point (DIPs, relative to the flyout's top-left corner).
     pub fn hit(&self, x: f32, y: f32) -> FlyoutHit {
+        self.hit_scrolled(x, y, 0.0)
+    }
+
+    /// `hit` for a page scrolled by `scroll` DIPs (only the Settings page scrolls).
+    pub fn hit_scrolled(&self, x: f32, y: f32, scroll: f32) -> FlyoutHit {
+        if let Some(g) = &self.settings {
+            return match g.hit(x, y, scroll) {
+                SettingsHit::Back => FlyoutHit::Back,
+                SettingsHit::Row(id, part) => FlyoutHit::Setting { id, part },
+                SettingsHit::None => FlyoutHit::None,
+            };
+        }
         if let Some(w) = &self.welcome {
             return if w.button.contains(x, y) {
                 FlyoutHit::Start

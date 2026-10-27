@@ -59,9 +59,7 @@ tooltip_off	{0} · off	{0} · desligado
 tooltip_empty	JuiceBar: no devices	JuiceBar: nenhum dispositivo
 tooltip_plain	{0} · {1}	{0} · {1}
 menu_open	Open	Abrir
-menu_autostart	Start with Windows	Iniciar com o Windows
 menu_hotkey_unavailable	Shortcut {0} unavailable	Atalho {0} indisponível
-menu_devices	Devices	Dispositivos
 menu_quit	Quit	Sair
 empty_title	No devices yet	Nenhum dispositivo ainda
 empty_hint	Turn on a compatible mouse, keyboard or headset	Ligue um mouse, teclado ou fone compatível
@@ -79,3 +77,41 @@ welcome_tray_title	Keep the icon next to the clock	Deixe o ícone ao lado do rel
 welcome_tray_steps	Open Settings > Personalization > Taskbar > Other system tray icons and turn on JuiceBar. Or drag it from the ^ arrow onto the taskbar.	Abra Configurações > Personalização > Barra de tarefas > Outros ícones da bandeja do sistema e ative o JuiceBar. Ou arraste-o da seta ^ para a barra de tarefas.
 welcome_credit	Created by Claudio Bertini	Idealizado por Claudio Bertini
 welcome_start	Get started	Começar
+menu_settings	Settings	Configurações
+sec_appearance	Appearance	Aparência
+set_theme	Theme	Tema
+theme_auto	Auto	Automático
+theme_light	Light	Claro
+theme_dark	Dark	Escuro
+set_icon_anim	Icon animation	Animação do ícone
+set_icon_anim_detail	The juice moves now and then	O suco se mexe de vez em quando
+set_transparency_hint	Turn on Windows transparency effects for the translucent background	Ative os efeitos de transparência do Windows para o fundo translúcido
+set_open	Open	Abrir
+sec_icon	Icon	Ícone
+set_green	Green when all are above	Verde quando todos acima de
+set_red	Red when any is below	Vermelho quando algum abaixo de
+set_adjusted_green	Adjusted to stay above the red limit	Ajustado para ficar acima do limite vermelho
+set_adjusted_red	Adjusted to stay below the green limit	Ajustado para ficar abaixo do limite verde
+sec_alerts	Alerts	Alertas
+set_low	Warn when battery is below	Avisar com bateria abaixo de
+set_smart	Smart warning	Aviso inteligente
+set_smart_detail	When a device will not last the day	Quando um dispositivo não vai durar o dia
+set_full	Full charge	Carga completa
+set_full_detail	Tell me when a device is charged	Avisar quando um dispositivo terminar de carregar
+set_dnd	Do not disturb	Não perturbe
+set_dnd_detail	No notifications; the icon still changes	Sem notificações; o ícone continua mudando
+sec_general	General	Geral
+set_autostart	Start with Windows	Iniciar com o Windows
+set_language	Language	Idioma
+lang_auto	Auto	Automático
+lang_pt	Português	Português
+lang_en	English	English
+set_hotkey	Shortcut	Atalho
+set_hotkey_detail	Opens JuiceBar from anywhere	Abre o JuiceBar de qualquer lugar
+sec_about	About	Sobre
+about_version	Version {0}	Versão {0}
+about_author	devBertini	devBertini
+about_github	Code on GitHub	Código no GitHub
+about_license	License GPL-3.0	Licença GPL-3.0
+about_license_detail	Free software: use, study, share and change	Software livre: use, estude, compartilhe e altere
+about_privacy	No network, no telemetry: everything stays on this computer	Sem rede, sem telemetria: tudo fica neste computador
