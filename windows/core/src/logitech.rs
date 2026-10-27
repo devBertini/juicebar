@@ -27,7 +27,7 @@ const VENDOR_ID: u16 = 0x046D;
 /// The first request to a device that may be asleep waits this long (a sleeping keyboard answered after 1.47 s).
 const FIRST_TIMEOUT: f64 = 4.0;
 const TIMEOUT: f64 = 1.0;
-/// A dongle whose headset is off is pinged at most this often.
+/// A dongle whose headset is off is checked (a battery read) at most this often.
 const DONGLE_PING_INTERVAL: f64 = 60.0;
 /// The slow battery refresh of an online device that does not push its battery (also `min_refresh_seconds`).
 const REFRESH_INTERVAL: f64 = 600.0;
@@ -600,7 +600,8 @@ impl Logitech {
             return Some((req, TIMEOUT));
         }
         let d = &g.devs[g.dev_pos(job.dev)?];
-        if !d.online && job.step != Step::Ping {
+        // A dongle's presence is its battery read: its requests go out while the device is offline.
+        if !d.online && job.step != Step::Ping && g.matcher != Match::Dongle {
             return None;
         }
         let long = g.long.is_some();
@@ -655,6 +656,11 @@ impl Logitech {
         let index = d.index;
         if !d.online && d.ping_at.is_some_and(|t| now.mono >= t) {
             d.ping_at = None;
+            // An offline dongle whose battery feature is known is checked by a battery read, not a ping.
+            if g.matcher == Match::Dongle && d.discovered && d.battery.is_some() {
+                self.enqueue_battery(gi, di);
+                return;
+            }
             d.probing = true;
             if !g.queued(index, |s| s == Step::Ping) {
                 g.queue.push_back(Job {
@@ -714,6 +720,14 @@ impl Logitech {
             self.dev_offline(gi, di, Cause::Timeout, now, out);
             return;
         }
+        // A dongle answers the ping itself: for it an error answer means the headset is off or out of range.
+        if self.groups[gi].matcher == Match::Dongle
+            && job.step != Step::Ping
+            && matches!(result, JobResult::Error)
+        {
+            self.dev_offline(gi, di, Cause::Refused, now, out);
+            return;
+        }
         // Any answer, an error included, shows the device is awake.
         if job.step != Step::Ping {
             self.groups[gi].devs[di].warm = true;
@@ -725,7 +739,10 @@ impl Logitech {
         match job.step {
             Step::Ping => match payload {
                 Some(p) if hidpp::decode_ping(&p).is_some() => {
-                    self.mark_online(gi, di, now, out);
+                    // A dongle's ping proves only the dongle: its first battery answer brings the device online.
+                    if self.groups[gi].matcher != Match::Dongle {
+                        self.mark_online(gi, di, now, out);
+                    }
                     self.after_ping(gi, di, now);
                 }
                 _ => self.dev_offline(gi, di, Cause::Refused, now, out),
@@ -985,7 +1002,14 @@ impl Logitech {
         let reconnecting = d.battery_due.is_some();
         let has_battery = d.battery.is_some();
         let index = d.index;
-        self.sync_key(&key, now, out);
+        if self.groups[gi].matcher == Match::Dongle && !self.groups[gi].devs[di].online {
+            // Announced with its first battery answer, or when it is found offline.
+            if !has_battery {
+                self.mark_online(gi, di, now, out);
+            }
+        } else {
+            self.sync_key(&key, now, out);
+        }
         if !has_battery {
             return;
         }
@@ -1056,6 +1080,14 @@ impl Logitech {
         pushed: bool,
         out: &mut Vec<Action>,
     ) {
+        if self.groups[gi].matcher == Match::Dongle && !self.groups[gi].devs[di].online {
+            let at = Now {
+                wall,
+                mono,
+                utc_offset: 0,
+            };
+            self.mark_online(gi, di, at, out);
+        }
         let d = &mut self.groups[gi].devs[di];
         let reading = to_reading(&data, wall, d.row);
         d.last_read = Some(mono);

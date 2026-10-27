@@ -119,6 +119,25 @@ fn a_dongle_whose_headset_is_off_is_pinged_at_most_every_sixty_seconds() {
 }
 
 #[test]
+fn the_sixty_second_check_of_an_offline_dongle_is_a_battery_read() {
+    let mut rig = Rig::new();
+    let mut fake = Fake::from_trace(G733_TRACE, 1, 1);
+    fake.script(&long("11ff080d00"), &long("11ffff080d05"));
+    rig.add_fake(fake, &[1]);
+    rig.arrive(endpoint(1, 0x0AFE, 0xFF43, 0x0202, 20));
+    assert_eq!(count_presence(&rig.take_events()), vec![false]);
+    let sent = rig.sent.len();
+    let offline_at = rig.mono;
+    rig.advance(offline_at + 59.9);
+    assert_eq!(rig.sent.len(), sent, "nothing before the 60 s");
+    rig.advance(offline_at + 60.0);
+    assert_eq!(rig.sent.len(), sent + 1);
+    assert_eq!(hex_of(&rig.sent.last().unwrap().frame), long("11ff080d00"));
+    // Still off: no event repeats.
+    assert!(rig.take_events().is_empty());
+}
+
+#[test]
 fn a_dongle_that_answers_with_an_error_is_offline_at_once() {
     let mut rig = Rig::new();
     let mut fake = Fake::from_trace(G733_TRACE, 1, 1);
