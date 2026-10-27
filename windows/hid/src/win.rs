@@ -5,6 +5,7 @@
 //! writes. Nothing here blocks except `Drop`, which waits for cancelled I/O.
 
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_Get_Device_Interface_List_SizeW,
@@ -15,14 +16,17 @@ use windows::Win32::Devices::HumanInterfaceDevice::{
     HidD_GetProductString, HidP_GetCaps, PHIDP_PREPARSED_DATA,
 };
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_IO_PENDING, GENERIC_READ, GENERIC_WRITE, HANDLE, WAIT_OBJECT_0,
+    CloseHandle, ERROR_IO_PENDING, GENERIC_READ, GENERIC_WRITE, HANDLE, WAIT_FAILED, WAIT_OBJECT_0,
+    WAIT_TIMEOUT,
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, ReadFile,
     WriteFile,
 };
 use windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
-use windows::Win32::System::Threading::{CreateEventW, ResetEvent, WaitForSingleObject};
+use windows::Win32::System::Threading::{
+    CreateEventW, ResetEvent, WaitForMultipleObjects, WaitForSingleObject,
+};
 use windows::core::PCWSTR;
 
 use crate::endpoint::Endpoint;
@@ -352,6 +356,32 @@ impl Port {
     }
 }
 
+/// Waits (at most `budget`) for the writes in flight and queued on `ports` to finish, so a
+/// request sent just before shutdown (the lighting restore) reaches the device before the
+/// remaining I/O is cancelled.
+pub(crate) fn drain_writes(ports: &mut [Port], budget: Duration) {
+    let deadline = Instant::now() + budget;
+    loop {
+        let handles: Vec<HANDLE> = ports.iter().filter_map(Port::write_handle).collect();
+        if handles.is_empty() {
+            return;
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return;
+        }
+        let ms = left.as_millis().clamp(1, u32::MAX as u128 - 1) as u32;
+        // SAFETY: `handles` holds valid write events owned by the ports, alive for the call.
+        let r = unsafe { WaitForMultipleObjects(&handles, false, ms) };
+        if r == WAIT_TIMEOUT || r == WAIT_FAILED {
+            return;
+        }
+        for port in ports.iter_mut() {
+            port.service_write();
+        }
+    }
+}
+
 impl Drop for Port {
     fn drop(&mut self) {
         // SAFETY: cancel, wait for the cancelled I/O to finish (so the kernel no longer touches
@@ -371,5 +401,117 @@ impl Drop for Port {
             let _ = CloseHandle(self.read_event);
             let _ = CloseHandle(self.write_event);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::endpoint::{EndpointId, TransportKind};
+    use std::io::Read;
+    use std::os::windows::io::{FromRawHandle, RawHandle};
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
+    use windows::Win32::System::Pipes::{
+        ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
+    };
+
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+
+    /// A named pipe with no buffers: a client write stays pending until the server reads it,
+    /// like a device that takes its time to accept a report. Returns the client port and the
+    /// server end.
+    fn pipe_port() -> (Port, std::fs::File) {
+        let name = format!(
+            r"\\.\pipe\juicebar-hid-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        );
+        let w = wide(&name);
+        // SAFETY: `w` is a NUL-terminated UTF-16 name that outlives the call.
+        let server = unsafe {
+            CreateNamedPipeW(
+                PCWSTR(w.as_ptr()),
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                1,
+                0,
+                0,
+                0,
+                None,
+            )
+        };
+        assert!(
+            !server.is_invalid(),
+            "{:?}",
+            windows::core::Error::from_thread()
+        );
+        let endpoint = Endpoint {
+            id: EndpointId(1),
+            vid: 0x046D,
+            pid: 0,
+            usage_page: 0xFF00,
+            usage: 1,
+            input_len: 8,
+            output_len: 4,
+            product: String::new(),
+            kind: TransportKind::Usb,
+        };
+        let port = Port::open(&name, endpoint).expect("client end opens");
+        // SAFETY: the server end is connected (the client opened it) and wrapped exactly once.
+        let _ = unsafe { ConnectNamedPipe(server, None) };
+        // SAFETY: `server` is a valid handle owned by nobody else; the File closes it.
+        let file = unsafe { std::fs::File::from_raw_handle(server.0 as RawHandle) };
+        (port, file)
+    }
+
+    fn read_later(
+        mut server: std::fs::File,
+        bytes: usize,
+        after_ms: u64,
+    ) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(after_ms));
+            let mut got = vec![0u8; bytes];
+            server.read_exact(&mut got).expect("the write arrived");
+            got
+        })
+    }
+
+    #[test]
+    fn a_pending_write_finishes_before_the_port_is_closed() {
+        let (mut port, server) = pipe_port();
+        let reader = read_later(server, 4, 80);
+        port.queue_write(vec![0x11, 0x22, 0x33, 0x44]);
+        assert!(
+            port.write_handle().is_some(),
+            "the write is still in flight"
+        );
+        drain_writes(std::slice::from_mut(&mut port), Duration::from_millis(1000));
+        assert!(port.write_handle().is_none());
+        drop(port);
+        assert_eq!(reader.join().unwrap(), vec![0x11, 0x22, 0x33, 0x44]);
+    }
+
+    #[test]
+    fn writes_queued_behind_the_one_in_flight_are_sent_too() {
+        let (mut port, server) = pipe_port();
+        let reader = read_later(server, 8, 60);
+        port.queue_write(vec![1, 2, 3, 4]);
+        port.queue_write(vec![5, 6, 7, 8]);
+        drain_writes(std::slice::from_mut(&mut port), Duration::from_millis(1000));
+        drop(port);
+        assert_eq!(reader.join().unwrap(), vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn the_wait_is_bounded_when_the_device_never_takes_the_write() {
+        let (mut port, _server) = pipe_port();
+        port.queue_write(vec![9, 9, 9, 9]);
+        let started = Instant::now();
+        drain_writes(std::slice::from_mut(&mut port), Duration::from_millis(150));
+        let took = started.elapsed();
+        assert!(took >= Duration::from_millis(100), "{took:?}");
+        assert!(took < Duration::from_millis(900), "{took:?}");
     }
 }

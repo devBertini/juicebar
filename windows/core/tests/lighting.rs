@@ -373,7 +373,11 @@ fn every_lighting_frame_passes_only_the_lighting_list_and_every_other_only_the_g
         let req = Request::parse(&s.frame).expect("a report");
         if req.b3 & 0x0F == LIGHT_SWID {
             lighting_frames += 1;
-            assert!(!hidpp::is_allowed(&req), "{}", hidpp::hex(&s.frame));
+            assert!(
+                !hidpp::is_allowed(&req, &[req.b2]),
+                "{}",
+                hidpp::hex(&s.frame)
+            );
             assert!(
                 lighting::is_allowed(&req, Some(14), Some(100)),
                 "{}",
@@ -383,7 +387,11 @@ fn every_lighting_frame_passes_only_the_lighting_list_and_every_other_only_the_g
             assert!(req.b2 == 0 || req.b2 == 14);
             assert!(req.b3 >> 4 <= 2);
         } else {
-            assert!(hidpp::is_allowed(&req), "{}", hidpp::hex(&s.frame));
+            assert!(
+                hidpp::is_allowed(&req, &[req.b2]),
+                "{}",
+                hidpp::hex(&s.frame)
+            );
             assert!(!lighting::is_allowed(&req, Some(14), Some(100)));
         }
     }

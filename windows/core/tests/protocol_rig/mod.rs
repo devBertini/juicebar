@@ -428,8 +428,9 @@ impl Rig {
         for s in &self.sent {
             let req =
                 Request::parse(&s.frame).unwrap_or_else(|| panic!("not a report: {:?}", s.frame));
+            let known: Vec<u8> = features.iter().map(|f| f.0).collect();
             assert!(
-                hidpp::is_allowed(&req),
+                hidpp::is_allowed(&req, &known),
                 "outside the allow-list: {}",
                 hidpp::hex(&s.frame)
             );

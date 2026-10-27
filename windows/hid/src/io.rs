@@ -24,7 +24,10 @@ use crate::endpoint::{
     Endpoint, EndpointId, LOGITECH_VID, TransportEvent, TransportKind, is_hidpp_collection,
 };
 use crate::path::parse_interface_path;
-use crate::win::{Port, present_paths, query};
+use crate::win::{Port, drain_writes, present_paths, query};
+
+/// How long shutdown waits for queued writes to finish before cancelling them.
+const SHUTDOWN_WRITE_BUDGET: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// `WaitForMultipleObjects` takes at most 64 handles: the control event, then up to two per port.
 const MAX_PORTS: usize = 31;
@@ -285,7 +288,9 @@ pub(crate) fn run(shared: Arc<Shared>, tx: Sender<TransportEvent>, waker: Arc<dy
             break;
         }
     }
-    // Dropping the ports cancels their I/O and closes the handles.
+    // A request queued just before `Stop` (the lighting restore) gets a short while to reach the
+    // device; dropping the ports then cancels what is still pending and closes the handles.
+    drain_writes(&mut io.ports, SHUTDOWN_WRITE_BUDGET);
     io.ports.clear();
 }
 
@@ -295,7 +300,7 @@ mod tests {
 
     #[test]
     fn reads_up_to_the_nul() {
-        let units: Vec<u16> = "hid#vid_046d trailing".encode_utf16().collect();
+        let units: Vec<u16> = "hid#vid_046d\0trailing".encode_utf16().collect();
         assert_eq!(wide_until_nul(&units), "hid#vid_046d");
     }
 

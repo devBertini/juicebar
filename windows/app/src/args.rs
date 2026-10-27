@@ -36,6 +36,16 @@ impl Args {
         !self.demo && !self.empty
     }
 
+    /// A launch with none of the test or development flags: the only one that may touch the
+    /// owner's start-with-Windows value.
+    pub fn is_plain(&self) -> bool {
+        self.data.is_none()
+            && !self.demo
+            && !self.empty
+            && !self.no_hotkey
+            && self.seconds.is_none()
+    }
+
     pub fn parse<I: IntoIterator<Item = String>>(items: I) -> Args {
         let mut a = Args::default();
         let mut it = items.into_iter();
@@ -102,6 +112,22 @@ mod tests {
         assert_eq!(plain.anim_every, None);
         assert!(!plain.no_hotkey);
         assert_eq!(parse("--anim-every soon").anim_every, None);
+    }
+
+    #[test]
+    fn only_a_launch_with_none_of_the_test_flags_is_plain() {
+        assert!(parse("").is_plain());
+        assert!(parse("--lang en --log a.txt --trace t.txt").is_plain());
+        for flags in [
+            "--data d",
+            "--demo",
+            "--demo-cycle",
+            "--empty",
+            "--no-hotkey",
+            "--seconds 5",
+        ] {
+            assert!(!parse(flags).is_plain(), "{flags}");
+        }
     }
 
     #[test]

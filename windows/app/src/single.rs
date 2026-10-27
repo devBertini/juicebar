@@ -118,12 +118,12 @@ mod tests {
 
     #[test]
     fn names_are_per_user_and_safe() {
-        assert_eq!(mutex_name("Bertini"), "Local\\JuiceBar.Bertini");
+        assert_eq!(mutex_name("Ana"), "Local\\JuiceBar.Ana");
         assert_eq!(
             mutex_name("DOMAIN\\ana maria"),
             "Local\\JuiceBar.DOMAIN_ana_maria"
         );
-        assert_eq!(open_message_name("Bertini"), "JuiceBar.OpenFlyout.Bertini");
+        assert_eq!(open_message_name("Ana"), "JuiceBar.OpenFlyout.Ana");
         assert!(!open_message_name("a\\b").contains('\\'));
     }
 

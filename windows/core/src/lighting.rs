@@ -328,7 +328,10 @@ mod tests {
             for dev in [1, 6, DIRECT] {
                 let req = l.request(dev, step).unwrap();
                 assert!(is_allowed(&req, Some(14), Some(100)), "{step:?} {dev}");
-                assert!(!hidpp::is_allowed(&req), "{step:?} passes the general list");
+                assert!(
+                    !hidpp::is_allowed(&req, &[req.b2]),
+                    "{step:?} passes the general list"
+                );
             }
         }
     }
@@ -388,7 +391,7 @@ mod tests {
         // The general list passes functions 0 and 1 on any feature with software ID 0x0D, so a read of
         // 0x8040 would pass it; the writes (function 2) never do.
         let set = Request::feature(1, 14, 2, &[0, 0], true);
-        assert!(!hidpp::is_allowed(&set));
+        assert!(!hidpp::is_allowed(&set, &[set.b2]));
     }
 
     #[test]

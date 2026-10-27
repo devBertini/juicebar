@@ -3,7 +3,7 @@
 //! Start with Windows: the value `JuiceBar` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
 //! holds the quoted path of the exe. The menu's check reads and writes it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
 use windows::Win32::System::Registry::{
@@ -95,10 +95,21 @@ pub fn set_enabled(value: &str, exe: &Path, on: bool) -> Result<()> {
     }
 }
 
-/// When the value exists but points elsewhere (the exe moved), rewrite it.
+/// The exe path inside a stored command line: the quoted part, or the whole text when unquoted.
+pub fn stored_exe(cmd: &str) -> PathBuf {
+    let cmd = cmd.trim();
+    match cmd.strip_prefix('"') {
+        Some(rest) => PathBuf::from(rest.split('"').next().unwrap_or(rest)),
+        None => PathBuf::from(cmd),
+    }
+}
+
+/// Repairs a value whose exe is gone (the app was moved or reinstalled): rewrites it to the
+/// running exe. A value that still points at an exe on disk is left alone (a test or development
+/// run never takes it over), and a value that does not exist is never created.
 pub fn refresh(value: &str, exe: &Path) {
     if let Some(stored) = read(value)
-        && stored != quote_path(exe)
+        && !stored_exe(&stored).exists()
     {
         let _ = set_enabled(value, exe, true);
     }
@@ -134,5 +145,37 @@ mod tests {
         assert!(!is_enabled(name));
         // Deleting what is not there is fine.
         set_enabled(name, &exe, false).unwrap();
+    }
+
+    #[test]
+    fn refresh_leaves_a_value_whose_exe_still_exists_alone() {
+        let name = "JuiceBarTestKeep";
+        set_enabled(name, Path::new("x"), false).unwrap();
+        let alive = std::env::current_exe().unwrap();
+        set_enabled(name, &alive, true).unwrap();
+        let other = PathBuf::from(r"D:\target\debug\JuiceBar.exe");
+        refresh(name, &other);
+        assert_eq!(read(name).as_deref(), Some(quote_path(&alive).as_str()));
+        set_enabled(name, &alive, false).unwrap();
+    }
+
+    #[test]
+    fn refresh_never_creates_the_value() {
+        let name = "JuiceBarTestNever";
+        set_enabled(name, Path::new("x"), false).unwrap();
+        refresh(name, &std::env::current_exe().unwrap());
+        assert!(!is_enabled(name));
+    }
+
+    #[test]
+    fn the_stored_exe_is_read_from_the_quoted_command() {
+        assert_eq!(
+            stored_exe(r#""C:\A B\JuiceBar.exe" --x"#),
+            PathBuf::from(r"C:\A B\JuiceBar.exe")
+        );
+        assert_eq!(
+            stored_exe(r"C:\JuiceBar.exe"),
+            PathBuf::from(r"C:\JuiceBar.exe")
+        );
     }
 }

@@ -152,8 +152,10 @@ fn params_after(params: &[u8], used: usize) -> bool {
 /// - receiver register 0x00 read, and one write of it that keeps the wireless and software-present flags set;
 /// - receiver pairing reads, register 0xB5 sub-registers 0x20..=0x25 (never 0x30+, the serial numbers);
 /// - HID++ 2.0 with software ID 0x0D, functions 0 and 1 only (no setters), to device indexes 1..=6 or 0xFF;
-/// - on the Root feature only getFeature for the battery features and DeviceName, and the ping.
-pub fn is_allowed(req: &Request) -> bool {
+/// - on the Root feature (index 0) only getFeature for the battery features and DeviceName, and the ping;
+/// - on any other feature only an index in `known`: the battery and DeviceName indexes this device itself
+///   reported, never a guessed one.
+pub fn is_allowed(req: &Request, known: &[u8]) -> bool {
     if req.report_id != SHORT_ID && req.report_id != LONG_ID {
         return false;
     }
@@ -183,7 +185,7 @@ pub fn is_allowed(req: &Request) -> bool {
                 return false;
             }
             if b2 != 0 {
-                return true;
+                return known.contains(&b2);
             }
             // Root feature.
             match function {
@@ -483,87 +485,91 @@ mod tests {
 
     #[test]
     fn allow_list_has_exactly_the_protocol_requests() {
-        assert!(is_allowed(&Request::register_read(DIRECT, 0, [0; 3])));
-        assert!(!is_allowed(&Request::register_read(DIRECT, 0x02, [0; 3])));
-        assert!(!is_allowed(&Request::register_read(1, 0, [0; 3])));
+        assert!(is_allowed(&Request::register_read(DIRECT, 0, [0; 3]), &[]));
+        assert!(!is_allowed(
+            &Request::register_read(DIRECT, 0x02, [0; 3]),
+            &[]
+        ));
+        assert!(!is_allowed(&Request::register_read(1, 0, [0; 3]), &[]));
         for sub in 0x20..=0x25 {
-            assert!(is_allowed(&Request::register_read_long(
-                DIRECT,
-                REG_PAIRING,
-                [sub, 0, 0]
-            )));
+            assert!(is_allowed(
+                &Request::register_read_long(DIRECT, REG_PAIRING, [sub, 0, 0]),
+                &[]
+            ));
         }
         for sub in [0x1F, 0x26, 0x30, 0x35, 0x40, 0x45] {
             assert!(
-                !is_allowed(&Request::register_read_long(
-                    DIRECT,
-                    REG_PAIRING,
-                    [sub, 0, 0]
-                )),
+                !is_allowed(
+                    &Request::register_read_long(DIRECT, REG_PAIRING, [sub, 0, 0]),
+                    &[]
+                ),
                 "serial or name sub-register {sub:#x}"
             );
         }
         // The one write keeps the wireless and software-present flags set.
-        assert!(is_allowed(&Request::register_write(DIRECT, 0, [0, 9, 0])));
-        assert!(is_allowed(&Request::register_write(
-            DIRECT,
-            0,
-            [0x10, 0x0F, 0x01]
-        )));
-        assert!(!is_allowed(&Request::register_write(DIRECT, 0, [0, 0, 0])));
-        assert!(!is_allowed(&Request::register_write(DIRECT, 0, [0, 1, 0])));
-        assert!(!is_allowed(&Request::register_write(
-            DIRECT,
-            0x02,
-            [0, 9, 0]
-        )));
-        assert!(!is_allowed(&Request::register_write(
-            DIRECT,
-            0xB2,
-            [0, 9, 0]
-        )));
+        assert!(is_allowed(
+            &Request::register_write(DIRECT, 0, [0, 9, 0]),
+            &[]
+        ));
+        assert!(is_allowed(
+            &Request::register_write(DIRECT, 0, [0x10, 0x0F, 0x01]),
+            &[]
+        ));
+        assert!(!is_allowed(
+            &Request::register_write(DIRECT, 0, [0, 0, 0]),
+            &[]
+        ));
+        assert!(!is_allowed(
+            &Request::register_write(DIRECT, 0, [0, 1, 0]),
+            &[]
+        ));
+        assert!(!is_allowed(
+            &Request::register_write(DIRECT, 0x02, [0, 9, 0]),
+            &[]
+        ));
+        assert!(!is_allowed(
+            &Request::register_write(DIRECT, 0xB2, [0, 9, 0]),
+            &[]
+        ));
         let long_write = Request {
             report_id: LONG_ID,
             ..Request::register_write(DIRECT, 0, [0, 9, 0])
         };
-        assert!(!is_allowed(&long_write));
+        assert!(!is_allowed(&long_write, &[]));
         let sub_0x82 = Request {
             b2: 0x82,
             ..Request::register_write(DIRECT, 0, [0, 9, 0])
         };
-        assert!(!is_allowed(&sub_0x82));
+        assert!(!is_allowed(&sub_0x82, &[]));
         // HID++ 2.0.
-        assert!(is_allowed(&Request::feature(
-            1,
-            0,
-            1,
-            &[0, 0, PING_BYTE],
-            false
-        )));
-        assert!(!is_allowed(&Request::feature(1, 0, 1, &[0, 0, 0], false)));
+        assert!(is_allowed(
+            &Request::feature(1, 0, 1, &[0, 0, PING_BYTE], false),
+            &[]
+        ));
+        assert!(!is_allowed(
+            &Request::feature(1, 0, 1, &[0, 0, 0], false),
+            &[]
+        ));
         for id in [0x1004u16, 0x1001, 0x1000, 0x1F20, 0x0005] {
-            assert!(is_allowed(&Request::feature(
-                1,
-                0,
-                0,
-                &id.to_be_bytes(),
-                true
-            )));
+            assert!(is_allowed(
+                &Request::feature(1, 0, 0, &id.to_be_bytes(), true),
+                &[]
+            ));
         }
         for id in [0x0001u16, 0x0003, 0x1B04, 0x0000] {
             assert!(
-                !is_allowed(&Request::feature(1, 0, 0, &id.to_be_bytes(), true)),
+                !is_allowed(&Request::feature(1, 0, 0, &id.to_be_bytes(), true), &[]),
                 "{id:#x}"
             );
         }
-        assert!(is_allowed(&Request::feature(DIRECT, 8, 1, &[], true)));
-        assert!(is_allowed(&Request::feature(3, 3, 1, &[16], true)));
+        assert!(is_allowed(&Request::feature(DIRECT, 8, 1, &[], true), &[8]));
+        assert!(is_allowed(&Request::feature(3, 3, 1, &[16], true), &[3]));
         assert!(
-            !is_allowed(&Request::feature(1, 5, 2, &[0], true)),
+            !is_allowed(&Request::feature(1, 5, 2, &[0], true), &[5]),
             "function 2 is a setter on most features"
         );
-        assert!(!is_allowed(&Request::feature(0, 5, 1, &[], true)));
-        assert!(!is_allowed(&Request::feature(7, 5, 1, &[], true)));
+        assert!(!is_allowed(&Request::feature(0, 5, 1, &[], true), &[5]));
+        assert!(!is_allowed(&Request::feature(7, 5, 1, &[], true), &[5]));
         let wrong_swid = Request {
             report_id: LONG_ID,
             index: 1,
@@ -571,12 +577,43 @@ mod tests {
             b3: 0x1B,
             params: vec![],
         };
-        assert!(!is_allowed(&wrong_swid));
+        assert!(!is_allowed(&wrong_swid, &[]));
         let not_hidpp = Request {
             report_id: 0x12,
             ..Request::feature(1, 5, 1, &[], true)
         };
-        assert!(!is_allowed(&not_hidpp));
+        assert!(!is_allowed(&not_hidpp, &[]));
+    }
+
+    #[test]
+    fn a_function_on_an_unknown_feature_index_is_refused() {
+        // Only the root, and the battery and DeviceName indexes this device taught, take function 0 or 1.
+        let known = [3u8, 7];
+        for index in [3u8, 7] {
+            for function in [0u8, 1] {
+                assert!(is_allowed(
+                    &Request::feature(1, index, function, &[], true),
+                    &known
+                ));
+            }
+        }
+        for index in [1u8, 2, 4, 9, 0x7F] {
+            for function in [0u8, 1] {
+                assert!(
+                    !is_allowed(&Request::feature(1, index, function, &[], true), &known),
+                    "index {index} function {function}"
+                );
+                assert!(!is_allowed(
+                    &Request::feature(DIRECT, index, function, &[], true),
+                    &[]
+                ));
+            }
+        }
+        // The root needs no known index.
+        assert!(is_allowed(
+            &Request::feature(1, 0, 1, &[0, 0, PING_BYTE], false),
+            &[]
+        ));
     }
 
     #[test]

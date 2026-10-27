@@ -170,7 +170,8 @@ ids! {
     ABOUT_GITHUB = "about_github",
     ABOUT_LICENSE = "about_license",
     ABOUT_LICENSE_DETAIL = "about_license_detail",
-    ABOUT_PRIVACY = "about_privacy"
+    ABOUT_PRIVACY = "about_privacy",
+    AUTOSTART_TEST_MODE = "autostart_test_mode"
 }
 
 type Table = HashMap<&'static str, (&'static str, &'static str)>;
