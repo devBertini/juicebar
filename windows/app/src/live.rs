@@ -137,7 +137,12 @@ pub struct Live<H: Host> {
     light_changes: Vec<LightChange>,
     /// A read-back found another program (G HUB) putting the lighting back after the economy turned it down.
     lighting_conflict: bool,
+    /// The wall moment each device's record was last restored, created or compacted.
+    compacted: BTreeMap<DeviceKey, i64>,
 }
+
+/// How often a running record is compacted (at a flush), seconds.
+const COMPACT_EVERY_SECS: i64 = 24 * 3600;
 
 /// The catalog row behind a device key (`logitech-hidpp:40B5`): the key holds the canonical product id of the
 /// model, which the catalog lists under one of its match kinds.
@@ -184,6 +189,7 @@ impl<H: Host> Live<H> {
             closed: false,
             light_changes: Vec::new(),
             lighting_conflict: false,
+            compacted: BTreeMap::new(),
         };
         live.note(now.mono, || "start".to_string());
         // The economy: what an earlier run kept, then the switch as the user left it (for every device, those
@@ -214,6 +220,7 @@ impl<H: Host> Live<H> {
                 Ok(mut tracker) => {
                     live.prefs.apply(&mut tracker);
                     live.host.replace(&key, &tracker.record.encode_text());
+                    live.compacted.insert(key.clone(), wall_of(&now));
                     live.trackers.insert(key, tracker);
                 }
                 Err(e) => {
@@ -271,7 +278,7 @@ impl<H: Host> Live<H> {
         for key in keys {
             let lines = self.trackers.get_mut(&key).and_then(|t| t.tick(now.mono));
             if let Some(lines) = lines {
-                self.persist(&key, &lines, now.mono);
+                self.persist(&key, &lines, &now);
             }
         }
         self.schedule_batches();
@@ -397,9 +404,38 @@ impl<H: Host> Live<H> {
             self.presence_of(key, false, now.wall, &now);
             let lines = self.trackers.get_mut(key).and_then(|t| t.flush(now.mono));
             if let Some(lines) = lines {
-                self.persist(key, &lines, now.mono);
+                self.persist(key, &lines, &now);
             }
         }
+    }
+
+    /// The PC is going to sleep: no device can be reached any more, so every one is off from now and the
+    /// histories reach their files before the sleep.
+    pub fn suspend(&mut self, now: Now) {
+        if self.closed {
+            return;
+        }
+        self.note(now.mono, || "suspend".to_string());
+        let actions = self.provider.suspend(now);
+        self.execute(actions, now);
+        let keys: Vec<DeviceKey> = self.trackers.keys().cloned().collect();
+        for key in &keys {
+            let lines = self.trackers.get_mut(key).and_then(|t| t.flush(now.mono));
+            if let Some(lines) = lines {
+                self.persist(key, &lines, &now);
+            }
+        }
+    }
+
+    /// The PC woke: every device is asked once whether it is on (a ping each), and the ones that are give
+    /// their battery as on a reconnection.
+    pub fn resume(&mut self, now: Now) {
+        if self.closed {
+            return;
+        }
+        self.note(now.mono, || "resume".to_string());
+        let actions = self.provider.resume(now);
+        self.execute(actions, now);
     }
 
     // ------------------------------------------------------------ what the app takes out
@@ -506,7 +542,7 @@ impl<H: Host> Live<H> {
                     }
                 }
                 Action::Emit(event) => self.emit(event, &now),
-                Action::Persist(key, lines) => self.persist(&key, &lines, now.mono),
+                Action::Persist(key, lines) => self.persist(&key, &lines, &now),
                 Action::Wake(at) => self.want_wake(at),
             }
         }
@@ -551,7 +587,7 @@ impl<H: Host> Live<H> {
                 };
                 t.history.utc_offset = i64::from(now.utc_offset);
                 let (notices, lines) = t.on_reading(Reading::from_battery(&b), now.mono);
-                self.after_tracker(&key, notices, lines, now.mono);
+                self.after_tracker(&key, notices, lines, *now);
             }
         }
     }
@@ -572,6 +608,7 @@ impl<H: Host> Live<H> {
             self.lang,
         );
         self.prefs.apply(&mut tracker);
+        self.compacted.insert(info.key.clone(), wall_of(now));
         self.trackers.insert(info.key.clone(), tracker);
         self.rgb_of(&info.key, now);
     }
@@ -584,7 +621,7 @@ impl<H: Host> Live<H> {
         t.history.utc_offset = i64::from(now.utc_offset);
         let p = estimator::Presence::from(Presence { online, at });
         let (notices, lines) = t.on_presence(p, now.mono);
-        self.after_tracker(key, notices, lines, now.mono);
+        self.after_tracker(key, notices, lines, *now);
     }
 
     /// The RGB economy flag into a device's tracker (it writes a line only when the flag changes).
@@ -594,7 +631,7 @@ impl<H: Host> Live<H> {
             return;
         };
         if let Some(lines) = t.on_rgb(wall_of(now), on, now.mono) {
-            self.persist(key, &lines, now.mono);
+            self.persist(key, &lines, now);
         }
     }
 
@@ -603,21 +640,37 @@ impl<H: Host> Live<H> {
         key: &DeviceKey,
         notices: Vec<CoreNotice>,
         lines: Option<Vec<String>>,
-        mono: f64,
+        now: Now,
     ) {
         for n in notices {
             self.raw_notices.push((key.clone(), n));
         }
         if let Some(lines) = lines {
-            self.persist(key, &lines, mono);
+            self.persist(key, &lines, &now);
         }
     }
 
-    fn persist(&mut self, key: &DeviceKey, lines: &[String], mono: f64) {
-        self.note(mono, || {
+    /// Appends released lines to a device's file; a record a day old (since it was restored, created or last
+    /// compacted) is then cut to what the file keeps and the file is rewritten from it, so a run that stays up
+    /// for weeks does not grow without bound.
+    fn persist(&mut self, key: &DeviceKey, lines: &[String], now: &Now) {
+        self.note(now.mono, || {
             format!("persist {} {} line(s)", key.0, lines.len())
         });
         self.host.append(key, lines);
+        let wall = wall_of(now);
+        let since = *self.compacted.entry(key.clone()).or_insert(wall);
+        if wall - since < COMPACT_EVERY_SECS {
+            return;
+        }
+        let Some(t) = self.trackers.get_mut(key) else {
+            return;
+        };
+        t.record.compact(wall, i64::from(now.utc_offset));
+        let text = t.record.encode_text();
+        self.compacted.insert(key.clone(), wall);
+        self.note(now.mono, || format!("compact {}", key.0));
+        self.host.replace(key, &text);
     }
 
     // ------------------------------------------------------------ time
@@ -1759,5 +1812,121 @@ mod tests {
         assert_eq!(list[0].kind, Some(Kind::Mouse));
         assert!(list[0].shown && list[0].on);
         assert_eq!(list[0].connection, "Receptor");
+    }
+
+    fn keyboard_on(l: &Live<Fake>, secs: f64) -> (bool, Option<u8>) {
+        let snap = l.snapshot(&at(secs));
+        assert_eq!(snap.devices.len(), 1);
+        (snap.devices[0].on, snap.devices[0].percent)
+    }
+
+    #[test]
+    fn going_to_sleep_takes_every_device_offline_and_flushes_the_histories() {
+        let (mut l, _kb, secs) = keyboard_live(false, vec![]);
+        assert_eq!(keyboard_on(&l, secs), (true, Some(49)));
+        l.suspend(at(secs + 5.0));
+        assert!(!keyboard_on(&l, secs + 5.0).0, "off while asleep");
+        let key = l.host().appended[0].0.clone();
+        let wall = (T0 + secs + 5.0) as i64;
+        let lines = lines_for(&l, &key);
+        assert!(
+            lines.iter().any(|x| *x == format!("P {wall} 0")),
+            "the offline moment is written: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|x| x.starts_with("R ")),
+            "the batched reading is flushed: {lines:?}"
+        );
+        assert!(
+            l.host().sent.is_empty(),
+            "nothing is sent into a sleeping PC"
+        );
+        // A tick while asleep asks for nothing.
+        l.on_tick(at(secs + 100.0));
+        assert!(l.host().sent.is_empty());
+    }
+
+    #[test]
+    fn waking_pings_each_device_once_and_reads_the_battery_of_the_ones_that_answer() {
+        let (mut l, mut kb, mut secs) = keyboard_live(false, vec![]);
+        l.suspend(at(secs + 5.0));
+        secs += 3600.0;
+        kb.brightness = 13;
+        l.resume(at(secs));
+        assert_eq!(l.host().sent.len(), 1, "one ping for the one device");
+        settle(&mut l, &mut kb, &mut secs);
+        assert_eq!(keyboard_on(&l, secs), (true, Some(49)));
+        assert!(kb.writes.is_empty(), "waking writes nothing to the device");
+    }
+
+    #[test]
+    fn a_device_that_stays_off_after_waking_stays_off_and_is_not_pinged_again_at_once() {
+        let (mut l, _kb, secs) = keyboard_live(false, vec![]);
+        l.suspend(at(secs + 5.0));
+        l.resume(at(secs + 3600.0));
+        assert_eq!(l.host().sent.len(), 1);
+        // No answer: the ping times out and the device is off.
+        l.host_mut().sent.clear();
+        l.on_tick(at(secs + 3700.0));
+        assert!(!keyboard_on(&l, secs + 3700.0).0);
+        assert!(l.host().sent.is_empty(), "no second ping right away");
+    }
+
+    #[test]
+    fn suspending_twice_or_after_quitting_does_nothing_more() {
+        let (mut l, _kb, secs) = keyboard_live(false, vec![]);
+        l.suspend(at(secs + 5.0));
+        let n = l.host().appended.len();
+        l.suspend(at(secs + 6.0));
+        assert_eq!(l.host().appended.len(), n);
+        l.quit(at(secs + 7.0));
+        l.resume(at(secs + 8.0));
+        assert!(l.host().sent.is_empty());
+    }
+
+    const DAY_SECS: f64 = 86_400.0;
+
+    fn replaced_record(l: &Live<Fake>, key: &DeviceKey) -> Option<DeviceRecord> {
+        let (_, text) = l.host().replaced.iter().rev().find(|(k, _)| k == key)?;
+        Some(DeviceRecord::decode(text).expect("a readable history"))
+    }
+
+    #[test]
+    fn a_running_record_is_compacted_when_a_flush_finds_it_a_day_old() {
+        let mut l = live(vec![]);
+        l.execute(
+            vec![
+                appear(&g703(), "G703"),
+                online(&g703(), true, 1.0),
+                battery(&g703(), 80.0, Charging::Discharging, 2.0),
+            ],
+            at(2.0),
+        );
+        // Within the day nothing is rewritten, however many flushes happen.
+        l.execute(
+            vec![battery(&g703(), 79.0, Charging::Discharging, 3.0 * 3600.0)],
+            at(3.0 * 3600.0),
+        );
+        l.execute(
+            vec![battery(&g703(), 78.0, Charging::Discharging, 20.0 * 3600.0)],
+            at(20.0 * 3600.0),
+        );
+        assert!(l.host().replaced.is_empty(), "{:?}", l.host().replaced);
+        // 40 days later the old readings are past the 30 days the file keeps, and the next flush cuts them.
+        let late = 40.0 * DAY_SECS;
+        l.execute(
+            vec![battery(&g703(), 60.0, Charging::Discharging, late)],
+            at(late),
+        );
+        let record = replaced_record(&l, &g703()).expect("the file was rewritten compacted");
+        assert_eq!(record.readings.len(), 1, "{:?}", record.readings);
+        assert_eq!(record.readings[0].percent, Some(60.0));
+        // And the next day-old check starts from that moment: no second rewrite an hour later.
+        let rewrites = l.host().replaced.len();
+        l.execute(
+            vec![battery(&g703(), 59.0, Charging::Discharging, late + 3600.0)],
+            at(late + 3600.0),
+        );
+        assert_eq!(l.host().replaced.len(), rewrites);
     }
 }

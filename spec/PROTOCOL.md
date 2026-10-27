@@ -19,6 +19,7 @@ What the `logitech-hidpp` provider (`spec/PROVIDERS.md`) sends and reads. Every 
 1. Root (feature index 0) function 1, ping: answers the HID++ protocol version (4.2 on all three devices).
 2. Root function 0, getFeature, for each battery feature in the order `0x1004`, `0x1001`, `0x1000`, `0x1F20`: the first one present is the device's battery feature (index cached for this connection). Also `0x0005` DeviceName for the name.
 3. Never read `0x0003` DeviceInfo or the receiver's serial registers (`0xB5 0x30+n`): they carry serial numbers.
+4. Every request outside the power saver goes through one allow-list: the root (feature index 0) and, per device, only the FeatureSet, DeviceName and battery indexes that device reported; a function on any other index is refused.
 
 ## Battery reads and events
 | Feature | Read | Decode | Event |

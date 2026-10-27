@@ -20,12 +20,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{NIN_SELECT, ShellExecuteW};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowW,
-    GWLP_USERDATA, GetMessageW, GetWindowLongPtrW, GetWindowRect, KillTimer, MSG, PostMessageW,
-    PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SW_SHOWNORMAL, SetTimer,
-    SetWindowLongPtrW, TranslateMessage, WM_APP, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_ENDSESSION, WM_HOTKEY, WM_NCCREATE, WM_NCDESTROY, WM_SETTINGCHANGE, WM_TIMER,
-    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowW, GWLP_USERDATA,
+    GetMessageW, GetWindowLongPtrW, GetWindowRect, KillTimer, MSG, PBT_APMRESUMEAUTOMATIC,
+    PBT_APMSUSPEND, PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW,
+    SW_SHOWNORMAL, SetTimer, SetWindowLongPtrW, TranslateMessage, WM_APP, WM_CLOSE, WM_CONTEXTMENU,
+    WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENDSESSION, WM_HOTKEY, WM_NCCREATE,
+    WM_NCDESTROY, WM_POWERBROADCAST, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW,
+    WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
@@ -279,6 +280,9 @@ pub struct App {
     /// The limit that the last change of the other one moved (its row says so until the next change).
     adjusted: Cell<Option<crate::settings::Adjusted>>,
     hotkey_ok: Cell<bool>,
+    /// How many window-procedure calls are inside `dispatch` right now; the App must never be
+    /// freed while it is above zero.
+    in_dispatch: Cell<u32>,
     /// The shortcut's row: idle, waiting for a key combination, or told that the last one is taken.
     hotkey_state: Cell<HotkeyState>,
     /// The device being renamed on the Settings page, if any.
@@ -353,6 +357,7 @@ impl App {
             page_open: Cell::new(false),
             adjusted: Cell::new(None),
             hotkey_ok: Cell::new(false),
+            in_dispatch: Cell::new(0),
             hotkey_state: Cell::new(HotkeyState::Idle),
             rename: RefCell::new(None),
             device_slots: RefCell::new(Vec::new()),
@@ -383,7 +388,9 @@ impl App {
             "hotkey {}",
             if ok { "registered" } else { "unavailable" }
         ));
-        runkey::refresh(runkey::VALUE, &self.exe);
+        if self.args.is_plain() {
+            runkey::refresh(runkey::VALUE, &self.exe);
+        }
         if self.args.is_live() {
             self.start_live();
         }
@@ -634,10 +641,10 @@ impl App {
             }
             self.anim_key(&mut t, key);
             let dpi = tray::taskbar_dpi();
-            let dark_ui = system::app_theme() == juicebar_ui::model::Theme::Dark;
+            let dark_toast = toast_is_dark(system::taskbar_is_dark());
             for n in &notices {
                 self.trace(&format!("notice: {} | {}", n.title, n.body));
-                let shown = t.balloon(n, IconLook::default(), !dark_ui, tray::large_icon_px(dpi));
+                let shown = t.balloon(n, IconLook::default(), dark_toast, tray::large_icon_px(dpi));
                 self.trace(&format!("balloon ok: {}", shown.is_ok()));
             }
         }
@@ -768,6 +775,7 @@ impl App {
             settings: &settings,
             lang: self.lang.get(),
             autostart: runkey::is_enabled(runkey::VALUE),
+            autostart_locked: !self.args.is_plain(),
             transparency: system::transparency_enabled(),
             hotkey: settings.hotkey,
             hotkey_ok: self.hotkey_ok.get() || self.args.no_hotkey,
@@ -914,10 +922,7 @@ impl App {
             Some(Command::Open) => self.open_flyout(None),
             Some(Command::Settings) => self.open_settings(),
             Some(Command::Quit) => {
-                // SAFETY: destroying our own window ends the loop through WM_DESTROY.
-                unsafe {
-                    let _ = DestroyWindow(self.hwnd.get());
-                }
+                self.request_quit();
             }
             None => {}
         }
@@ -988,6 +993,8 @@ impl App {
             Change::Smart(on) => self.settings.borrow_mut().smart_warning = on,
             Change::Full(on) => self.settings.borrow_mut().full_notice = on,
             Change::DoNotDisturb(on) => self.settings.borrow_mut().do_not_disturb = on,
+            // A test or development launch never touches the owner's Run value.
+            Change::Autostart(_) if !self.args.is_plain() => {}
             Change::Autostart(on) => {
                 if let Err(e) = runkey::set_enabled(runkey::VALUE, &self.exe, on) {
                     self.trace(&format!("run key failed: {e}"));
@@ -1275,6 +1282,29 @@ impl App {
         }
     }
 
+    /// Sleep and wake: the devices are off while the PC sleeps, and asked again when it wakes.
+    fn on_power(&self, event: PowerEvent) {
+        let now = winhost::core_now(self.start);
+        self.trace(&format!("power {event:?}"));
+        let touched = self.source.borrow_mut().live_mut().map(|live| match event {
+            PowerEvent::Suspend => live.suspend(now),
+            PowerEvent::Resume => live.resume(now),
+        });
+        if touched.is_some() {
+            self.after_live(true);
+        }
+    }
+
+    /// Asks the window to close. Posted, never a direct `DestroyWindow`: the destroy messages
+    /// then arrive from the loop, not from inside the message that asked, and the App is freed
+    /// only after the loop ends.
+    fn request_quit(&self) {
+        // SAFETY: posting a message to our own window; the default handler of WM_CLOSE destroys it.
+        unsafe {
+            let _ = PostMessageW(Some(self.hwnd.get()), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+    }
+
     /// Takes the icon off the area and lets go of the hotkey. Safe to call twice.
     fn shutdown(&self) {
         let hwnd = self.hwnd.get();
@@ -1345,10 +1375,7 @@ impl App {
                 TIMER_PADS => self.on_pads(),
                 anim::TIMER_IDLE | anim::TIMER_FRAME => self.on_anim_timer(wparam.0),
                 TIMER_QUIT => {
-                    // SAFETY: destroying our own window ends the loop through WM_DESTROY.
-                    unsafe {
-                        let _ = DestroyWindow(self.hwnd.get());
-                    }
+                    self.request_quit();
                 }
                 _ => {}
             },
@@ -1361,6 +1388,13 @@ impl App {
             }
             WM_DPICHANGED | WM_DISPLAYCHANGE => self.refresh_tray(),
             WM_ENDSESSION if wparam.0 != 0 => self.shutdown(),
+            WM_POWERBROADCAST => {
+                if let Some(event) = power_event(wparam.0) {
+                    self.on_power(event);
+                }
+                // TRUE: the broadcast is granted whatever it was.
+                return Some(LRESULT(1));
+            }
             WM_DESTROY => {
                 self.shutdown();
                 // SAFETY: ends this thread's message loop.
@@ -1369,6 +1403,40 @@ impl App {
             _ => return None,
         }
         Some(LRESULT(0))
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        debug_assert_eq!(
+            self.in_dispatch.get(),
+            0,
+            "the App was freed while a message was being dispatched"
+        );
+    }
+}
+
+/// Windows draws a toast in the system mode ("choose your default Windows mode"), the same setting the taskbar
+/// follows, not in the apps' mode the flyout follows. The mark in the toast is drawn for that background: white
+/// on a dark one, near-black on a light one (`icon::foreground`).
+fn toast_is_dark(system_mode_is_dark: bool) -> bool {
+    system_mode_is_dark
+}
+
+/// What a `WM_POWERBROADCAST` means for the app.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PowerEvent {
+    Suspend,
+    Resume,
+}
+
+/// `PBT_APMSUSPEND` and `PBT_APMRESUMEAUTOMATIC` (sent on every wake; `PBT_APMRESUMESUSPEND` follows only after
+/// a user action, so the automatic one is the single wake signal); everything else is ignored.
+fn power_event(wparam: usize) -> Option<PowerEvent> {
+    match wparam as u32 {
+        PBT_APMSUSPEND => Some(PowerEvent::Suspend),
+        PBT_APMRESUMEAUTOMATIC => Some(PowerEvent::Resume),
+        _ => None,
     }
 }
 
@@ -1443,16 +1511,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     }
     if msg == WM_NCDESTROY {
-        // SAFETY: clearing the user data, then taking back the Box leaked in `run`; nothing uses it after.
+        // SAFETY: clearing the user data so later messages go to the default handler. The App
+        // itself is freed by `run` after the loop ends, never here, where a caller up the stack
+        // may still hold a reference to it.
         unsafe {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-            drop(Box::from_raw(ptr));
             return DefWindowProcW(hwnd, msg, wparam, lparam);
         }
     }
-    // SAFETY: the pointer lives until WM_NCDESTROY above.
+    // SAFETY: the pointer lives until `run` frees it after the message loop.
     let app = unsafe { &*ptr };
-    match app.dispatch(msg, wparam, lparam) {
+    app.in_dispatch.set(app.in_dispatch.get() + 1);
+    let handled = app.dispatch(msg, wparam, lparam);
+    // The App may be gone here only if a nested destroy freed it, which `in_dispatch` forbids.
+    app.in_dispatch.set(app.in_dispatch.get() - 1);
+    match handled {
         Some(r) => r,
         // SAFETY: forwarding the message unchanged.
         None => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
@@ -1475,7 +1548,7 @@ pub fn run(args: Args, user: &str) -> Result<()> {
         return Err(windows::core::Error::from_thread());
     }
     let app = Box::into_raw(Box::new(App::new(args, user)));
-    // SAFETY: the class is registered; `app` stays valid until WM_NCDESTROY reclaims it.
+    // SAFETY: the class is registered; `app` stays valid until `run` reclaims it after the loop.
     let created = unsafe {
         CreateWindowExW(
             WS_EX_TOOLWINDOW,
@@ -1507,6 +1580,8 @@ pub fn run(args: Args, user: &str) -> Result<()> {
             DispatchMessageW(&msg);
         }
     }
+    // SAFETY: the loop is over and the window is destroyed, so nothing holds the pointer.
+    drop(unsafe { Box::from_raw(app) });
     Ok(())
 }
 
@@ -1619,5 +1694,45 @@ mod tests {
         assert_eq!(lang_from_langid(0x0409), Lang::En, "en-US");
         assert_eq!(lang_from_langid(0x0C0A), Lang::En, "es");
         assert_eq!(lang_from_langid(0x0000), Lang::En);
+    }
+
+    #[test]
+    fn a_timed_run_quits_without_freeing_the_app_inside_its_own_message() {
+        let dir = std::env::temp_dir().join(format!("juicebar-test-quit-{}", std::process::id()));
+        let args = Args {
+            demo: true,
+            no_hotkey: true,
+            seconds: Some(1),
+            data: Some(dir.clone()),
+            ..Args::default()
+        };
+        run(args, "tester").expect("the run ends by itself");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_sleep_and_the_automatic_wake_reach_the_devices() {
+        assert_eq!(
+            power_event(PBT_APMSUSPEND as usize),
+            Some(PowerEvent::Suspend)
+        );
+        assert_eq!(
+            power_event(PBT_APMRESUMEAUTOMATIC as usize),
+            Some(PowerEvent::Resume)
+        );
+        // PBT_APMRESUMESUSPEND (7), PBT_APMPOWERSTATUSCHANGE (10) and the rest.
+        for other in [7usize, 10, 0x8013] {
+            assert_eq!(power_event(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn the_toast_mark_is_white_on_a_dark_system_and_dark_on_a_light_one() {
+        use juicebar_ui::icon::foreground;
+        let white = foreground(true);
+        let ink = foreground(false);
+        assert_eq!(foreground(toast_is_dark(true)).r, white.r);
+        assert_eq!(foreground(toast_is_dark(false)).r, ink.r);
+        assert!(white.r > ink.r);
     }
 }

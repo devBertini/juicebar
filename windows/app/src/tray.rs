@@ -242,11 +242,17 @@ impl Tray {
     }
 
     /// Shows a notice as a balloon (Windows 10 and 11 draw it as a toast), with the mark as its icon.
-    pub fn balloon(&self, notice: &Notice, mark: IconLook, dark_ui: bool, px: u32) -> Result<()> {
+    pub fn balloon(
+        &self,
+        notice: &Notice,
+        mark: IconLook,
+        dark_toast: bool,
+        px: u32,
+    ) -> Result<()> {
         if !self.added {
             return Ok(());
         }
-        let icon = render_mark(mark, &Frame::STILL, dark_ui, px)?;
+        let icon = render_mark(mark, &Frame::STILL, dark_toast, px)?;
         let mut nid = self.data(NIF_INFO);
         fill(&mut nid.szInfoTitle, &notice.title);
         fill(&mut nid.szInfo, &notice.body);

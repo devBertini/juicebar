@@ -138,11 +138,6 @@ pub const DS_USB_REPORT_LEN: usize = 64;
 const DS_USB_BATTERY: usize = 53;
 const DS_BT_BATTERY: usize = 54;
 
-/// Feature report ids whose read puts a Bluetooth DualSense into the full report mode (section 1d): the serial
-/// number (also the pad's address, which is only ever hashed) and the firmware info.
-pub const DS_FEATURE_SERIAL: u8 = 0x09;
-pub const DS_FEATURE_FIRMWARE: u8 = 0x20;
-
 /// The battery of a DualSense input report: `bluetooth` says which layout the bytes follow (report 0x31 over
 /// Bluetooth, 0x01 of 64 bytes over USB). The high nibble of the battery byte is the status (0 discharging,
 /// 1 charging, 2 full) and the low nibble the level 0 to 10, a step of ten percent: `level * 10 + 5`, capped at 100.

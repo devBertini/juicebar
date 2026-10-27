@@ -108,6 +108,8 @@ enum Cause {
     Refused,
     /// A request timed out.
     Timeout,
+    /// The PC went to sleep: nothing can be reached, and nothing is retried until it wakes.
+    Suspended,
 }
 
 struct EarlyEvent {
@@ -306,6 +308,40 @@ impl Logitech {
                 self.run_timers(gi, di, now);
                 self.light_timers(gi, di, now);
                 di += 1;
+            }
+            self.pump(gi, now, &mut out);
+        }
+        self.finish(&mut out);
+        out
+    }
+
+    /// The PC is going to sleep: every device is offline from now (no request can reach it), nothing queued
+    /// or in flight survives, and no timer asks for anything until `resume`.
+    pub fn suspend(&mut self, now: Now) -> Vec<Action> {
+        let mut out = Vec::new();
+        for gi in 0..self.groups.len() {
+            for di in 0..self.groups[gi].devs.len() {
+                self.dev_offline(gi, di, Cause::Suspended, now, &mut out);
+            }
+            let g = &mut self.groups[gi];
+            g.queue.clear();
+            g.inflight = None;
+        }
+        self.finish(&mut out);
+        out
+    }
+
+    /// The PC woke: every device is asked once whether it is on (a ping, or the battery read an offline dongle
+    /// is checked by); the ones that answer give their battery as on a reconnection.
+    pub fn resume(&mut self, now: Now) -> Vec<Action> {
+        let mut out = Vec::new();
+        for gi in 0..self.groups.len() {
+            if !(self.groups[gi].started && self.groups[gi].ready()) {
+                continue;
+            }
+            for di in 0..self.groups[gi].devs.len() {
+                self.groups[gi].devs[di].ping_at = Some(now.mono);
+                self.run_timers(gi, di, now);
             }
             self.pump(gi, now, &mut out);
         }
@@ -542,11 +578,13 @@ impl Logitech {
         d.light.connection_lost();
         d.link = match cause {
             Cause::LinkLost | Cause::Refused => Link::Down,
-            Cause::Timeout => Link::Unknown,
+            Cause::Timeout | Cause::Suspended => Link::Unknown,
         };
         // A dongle is pinged every 60 s while its headset is off. A receiver's device comes back by its own
         // notification; only a timeout, which that notification would not explain, gets a late ping.
-        d.ping_at = if direct {
+        d.ping_at = if cause == Cause::Suspended {
+            None
+        } else if direct {
             Some(now.mono + DONGLE_PING_INTERVAL)
         } else if cause == Cause::Timeout {
             Some(now.mono + REFRESH_INTERVAL)
@@ -590,7 +628,7 @@ impl Logitech {
             // requests have their own list (`lighting::is_allowed`), which the general one never admits.
             let allowed = match job.step {
                 Step::Light(_) => self.light_allowed(gi, job.dev, &req),
-                _ => hidpp::is_allowed(&req),
+                _ => hidpp::is_allowed(&req, &self.known_indexes(gi, job.dev)),
             };
             if !allowed {
                 debug_assert!(false, "request outside the allow-list: {req:?}");
@@ -610,6 +648,22 @@ impl Logitech {
                 deadline: now.mono + timeout,
             });
         }
+    }
+
+    /// The feature indexes (battery, DeviceName) the device itself reported: the only ones the general allow-list
+    /// admits besides the root.
+    fn known_indexes(&self, gi: usize, dev: u8) -> Vec<u8> {
+        let g = &self.groups[gi];
+        g.dev_pos(dev)
+            .map(|di| &g.devs[di])
+            .into_iter()
+            .flat_map(|d| {
+                d.battery
+                    .map(|(_, index)| index)
+                    .into_iter()
+                    .chain(d.name_index)
+            })
+            .collect()
     }
 
     /// A lighting job that cannot be sent ends its chain, so the next order can start another.

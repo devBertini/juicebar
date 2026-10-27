@@ -24,8 +24,8 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CR_SUCCESS, HCMNOTIFICATION,
 };
 use windows::Win32::Devices::HumanInterfaceDevice::{
-    HIDP_CAPS, HidD_FreePreparsedData, HidD_GetFeature, HidD_GetHidGuid, HidD_GetPreparsedData,
-    HidP_GetCaps, PHIDP_PREPARSED_DATA,
+    HIDP_CAPS, HidD_FreePreparsedData, HidD_GetHidGuid, HidD_GetPreparsedData, HidP_GetCaps,
+    PHIDP_PREPARSED_DATA,
 };
 use windows::Win32::Foundation::{
     CloseHandle, ERROR_IO_PENDING, GENERIC_READ, HANDLE, HWND, LPARAM, WAIT_OBJECT_0, WPARAM,
@@ -43,8 +43,7 @@ use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 use windows::core::{PCWSTR, s, w};
 
 use juicebar_core::controllers::{
-    self, DS_BT_REPORT_ID, DS_FEATURE_FIRMWARE, DS_FEATURE_SERIAL, DS_USB_REPORT_ID, GamingStatus,
-    Model, Protocol, REFRESH_SECONDS,
+    self, DS_BT_REPORT_ID, DS_USB_REPORT_ID, GamingStatus, Model, Protocol, REFRESH_SECONDS,
 };
 use juicebar_core::types::{BatteryReading, DeviceKey, Presence, ProviderEvent};
 use juicebar_hid::parse_interface_path;
@@ -455,9 +454,10 @@ fn caps_of(h: HANDLE) -> Option<HIDP_CAPS> {
     (status.0 >= 0).then_some(caps)
 }
 
-/// Opens the pad shared, reads one input report within [`SAMPLE_TIMEOUT`] and closes it. Over Bluetooth the
-/// feature reads that switch the pad to its full reports come first. `None` when the pad cannot be opened, is not
-/// a game pad collection, or sends nothing in time. Runs on a short-lived thread.
+/// Opens the pad shared, reads one input report within [`SAMPLE_TIMEOUT`] and closes it. Nothing is written or
+/// asked of the pad (a feature read would switch a Bluetooth pad out of the simple mode a game uses): a
+/// Bluetooth pad that is not already sending report 0x31 gives no reading. `None` when the pad cannot be opened,
+/// is not a game pad collection, or sends nothing in time. Runs on a short-lived thread.
 fn sample_dualsense(path: &str, bluetooth: bool) -> Option<Vec<u8>> {
     let wide = windows::core::HSTRING::from(path);
     // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the call. Read access and a shared open: the
@@ -480,16 +480,6 @@ fn sample_dualsense(path: &str, bluetooth: bool) -> Option<Vec<u8>> {
     if caps.UsagePage != 1 || !matches!(caps.Usage, 4 | 5) {
         return None;
     }
-    if bluetooth {
-        let len = usize::from(caps.FeatureReportByteLength).clamp(2, 1024);
-        for id in [DS_FEATURE_SERIAL, DS_FEATURE_FIRMWARE] {
-            let mut buf = vec![0u8; len];
-            buf[0] = id;
-            // SAFETY: the pointer and length describe `buf` exactly. A refused read is not an error here: it only
-            // means the pad stays in its short report mode and the decoder finds no battery.
-            let _ = unsafe { HidD_GetFeature(file.0, buf.as_mut_ptr().cast(), len as u32) };
-        }
-    }
     let want = if bluetooth {
         DS_BT_REPORT_ID
     } else {
@@ -498,8 +488,15 @@ fn sample_dualsense(path: &str, bluetooth: bool) -> Option<Vec<u8>> {
     read_report(file.0, usize::from(caps.InputReportByteLength), want)
 }
 
-/// One input report of an opened HID handle within [`SAMPLE_TIMEOUT`]: reports of another id (a Bluetooth pad
-/// still in its short mode) are passed over until `want` comes or the time is up, and the last one read is
+/// Whether a report with this id ends the sampling: the wanted one, or, for a Bluetooth pad, the short
+/// "simple" report (0x01) it sends until a program switches it: that pad gives no reading, and waiting out
+/// the timeout would change nothing.
+fn sampling_done(id: u8, want: u8) -> bool {
+    id == want || (want == DS_BT_REPORT_ID && id == DS_USB_REPORT_ID)
+}
+
+/// One input report of an opened HID handle within [`SAMPLE_TIMEOUT`]: reports of another id are passed over
+/// until `want` (or a Bluetooth pad's short mode, see `sampling_done`) comes or the time is up, and the last one read is
 /// returned. The read is always ended before this returns, so no buffer is left in the kernel's hands.
 fn read_report(file: HANDLE, input_len: usize, want: u8) -> Option<Vec<u8>> {
     // SAFETY: plain event creation: manual reset, initially not signaled, unnamed.
@@ -532,7 +529,7 @@ fn read_report(file: HANDLE, input_len: usize, want: u8) -> Option<Vec<u8>> {
                 break;
             }
             let report = buf[..(n as usize).min(buf.len())].to_vec();
-            let right = report.first() == Some(&want);
+            let right = report.first().is_some_and(|id| sampling_done(*id, want));
             last = Some(report);
             if right {
                 break;
@@ -1083,5 +1080,24 @@ mod tests {
             return;
         }
         panic!("no Logitech HID collection could be opened");
+    }
+
+    #[test]
+    fn the_sampler_never_reads_a_feature_report() {
+        // A feature read switches a Bluetooth pad out of the simple mode the game uses.
+        let source = include_str!("controllers.rs");
+        let call = ["HidD_Get", "Feature("].concat();
+        assert_eq!(source.matches(&call).count(), 0);
+    }
+
+    #[test]
+    fn a_bluetooth_pad_in_its_simple_mode_ends_the_sample_with_no_reading() {
+        assert!(sampling_done(DS_BT_REPORT_ID, DS_BT_REPORT_ID));
+        assert!(sampling_done(0x01, DS_BT_REPORT_ID), "simple mode report");
+        assert!(!sampling_done(0x05, DS_BT_REPORT_ID));
+        assert!(sampling_done(DS_USB_REPORT_ID, DS_USB_REPORT_ID));
+        assert!(!sampling_done(DS_BT_REPORT_ID, DS_USB_REPORT_ID));
+        let simple = [0x01, 0x80, 0x80, 0x80, 0x80, 0x08, 0, 0, 0, 0];
+        assert!(controllers::decode_dualsense(&simple, true, 0.0).is_none());
     }
 }

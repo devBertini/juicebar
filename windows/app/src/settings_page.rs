@@ -73,12 +73,25 @@ impl HotkeyState {
     }
 }
 
+/// The "Start with Windows" row. In a test or development launch it shows the stored state, dimmed, with a line
+/// saying why it cannot be changed.
+fn autostart_row(i: &PageInput<'_>, lang: Lang, label: &str) -> SettingsRow {
+    let row = SettingsRow::toggle(row::AUTOSTART, label, i.autostart);
+    if !i.autostart_locked {
+        return row;
+    }
+    row.with_enabled(false)
+        .with_detail(strings::get(lang, id::AUTOSTART_TEST_MODE))
+}
+
 /// Everything the page depends on.
 pub struct PageInput<'a> {
     pub settings: &'a Settings,
     pub lang: Lang,
     /// "Start with Windows": the Run key's state.
     pub autostart: bool,
+    /// A test or development launch: the row shows the state and never writes the Run value.
+    pub autostart_locked: bool,
     /// Windows' "Transparency effects" are on.
     pub transparency: bool,
     pub hotkey: Hotkey,
@@ -201,7 +214,7 @@ pub fn build(i: &PageInput<'_>) -> UiSettings {
         ),
     };
     let mut general = vec![
-        SettingsRow::toggle(row::AUTOSTART, t(id::SET_AUTOSTART), i.autostart),
+        autostart_row(i, lang, t(id::SET_AUTOSTART)),
         SettingsRow::choice(
             row::LANGUAGE,
             t(id::SET_LANGUAGE),
@@ -391,6 +404,7 @@ mod tests {
             settings: s,
             lang,
             autostart: true,
+            autostart_locked: false,
             transparency,
             hotkey: Hotkey::DEFAULT,
             hotkey_ok: true,
@@ -442,6 +456,7 @@ mod tests {
             settings: &Settings::default(),
             lang,
             autostart: false,
+            autostart_locked: false,
             transparency: true,
             hotkey,
             hotkey_ok: true,
@@ -731,6 +746,7 @@ mod tests {
             settings: &Settings::default(),
             lang: Lang::PtBr,
             autostart: false,
+            autostart_locked: false,
             transparency: true,
             hotkey: Hotkey::DEFAULT,
             hotkey_ok: false,
@@ -1135,5 +1151,41 @@ mod tests {
         p.focus = Some(row::GITHUB);
         let (id, part) = p.activate(NavKey::Enter).unwrap();
         assert_eq!(action(&p, id, part), Some(Change::Open(GITHUB_URL)));
+    }
+
+    #[test]
+    fn a_test_launch_shows_the_autostart_row_read_only_with_the_reason() {
+        let page = |locked: bool, lang: Lang| {
+            build(&PageInput {
+                settings: &Settings::default(),
+                lang,
+                autostart: true,
+                autostart_locked: locked,
+                transparency: true,
+                hotkey: Hotkey::DEFAULT,
+                hotkey_ok: true,
+                hotkey_state: HotkeyState::Idle,
+                devices: &[],
+                rename: None,
+                adjusted: None,
+            })
+        };
+        let plain = page(false, Lang::PtBr);
+        let r = plain.row(row::AUTOSTART).unwrap();
+        assert!(r.enabled);
+        assert_eq!(r.detail, None);
+        let locked = page(true, Lang::PtBr);
+        let r = locked.row(row::AUTOSTART).unwrap();
+        assert!(!r.enabled);
+        assert!(matches!(r.kind, RowKind::Toggle { on: true }));
+        assert_eq!(
+            r.detail.as_deref(),
+            Some("indisponível neste modo de teste")
+        );
+        let en = page(true, Lang::En);
+        assert_eq!(
+            en.row(row::AUTOSTART).unwrap().detail.as_deref(),
+            Some("unavailable in this test mode")
+        );
     }
 }

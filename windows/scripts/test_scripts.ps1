@@ -27,6 +27,7 @@ function Listing($folder) {
 $ownerData = Join-Path $env:LOCALAPPDATA 'JuiceBar'
 $before = Listing $ownerData
 $runBefore = (Get-ItemProperty -Path $key -Name JuiceBar -ErrorAction SilentlyContinue).JuiceBar
+$throwaway = 'JuiceBarScriptsTest'
 $ownerPids = @(Get-Process -Name JuiceBar -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
 
 try {
@@ -40,11 +41,18 @@ try {
     $exe = Join-Path $inst 'JuiceBar.exe'
     $proc = Start-Process -FilePath $exe -ArgumentList @('--data', $data, '--no-hotkey', '--seconds', '40') -PassThru
     Start-Sleep -Seconds 2
+    # A test run (--data, --seconds) must not take over a start-with-Windows value: the owner's value, when he has
+    # one, and a throwaway value of another name pointing at the installed exe are compared before and after.
+    New-ItemProperty -Path $key -Name $throwaway -Value ('"' + $exe + '"') -PropertyType String -Force | Out-Null
+    $throwBefore = (Get-ItemProperty -Path $key -Name $throwaway).$throwaway
+    Start-Sleep -Seconds 1
     $r = Run-Script 'measure.ps1' @('-ProcessId', $proc.Id, '-Minutes', '0.5', '-Interval', '5')
     Check ($r.Code -eq 0) 'measure exits 0'
     Check ($r.Out -match 'CpuSec' -and $r.Out -match 'Handles') 'table printed'
     Check ($r.Out -match 'CPU: .* % of one core') 'CPU line printed'
     Check ($r.Out -match 'Delta over') 'delta line printed'
+    Check ((Get-ItemProperty -Path $key -Name JuiceBar -ErrorAction SilentlyContinue).JuiceBar -eq $runBefore) 'Run value unchanged by a test run (--data)'
+    Check ((Get-ItemProperty -Path $key -Name $throwaway -ErrorAction SilentlyContinue).$throwaway -eq $throwBefore) 'throwaway Run value unchanged by a test run'
 
     Write-Output '== uninstall'
     $r = Run-Script 'uninstall.ps1' @('-Destination', $inst)
@@ -55,6 +63,7 @@ try {
     Check ($before -ceq (Listing $ownerData)) 'owner data folder listing unchanged'
     foreach ($id in $ownerPids) { Check ($null -ne (Get-Process -Id $id -ErrorAction SilentlyContinue)) "owner's JuiceBar PID $id still running" }
 } finally {
+    Remove-ItemProperty -Path $key -Name $throwaway -ErrorAction SilentlyContinue
     Get-Process -Name JuiceBar -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -like "$tmp*" } catch { $false } } | Stop-Process -Force
     Start-Sleep -Milliseconds 500
     if ((Test-Path $tmp) -and $tmp -like '*juicebar-scripts-*') { Remove-Item -LiteralPath $tmp -Recurse -Force }
