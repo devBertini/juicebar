@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "juicebar-core"
+version = "0.1.0"
+
+[[package]]
 name = "juicebar-probe"
 version = "0.1.0"
 dependencies = [
