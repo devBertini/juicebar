@@ -4,10 +4,12 @@
 //!
 //! ```text
 //! rgb_economy=1
+//! welcome_seen=1
 //! hidden=logitech-hidpp:0AB5
 //! light=logitech-hidpp:40B5 brightness:13
 //! ```
 //!
+//! `welcome_seen` is set once the first-open page has been shown, so it never comes back.
 //! `light` is the level the RGB economy took a device's lighting down from, kept until it is restored, so a run
 //! that ended with the lighting down still knows what to give back (the core's `SavedLight` text).
 //!
@@ -19,6 +21,8 @@ use juicebar_core::types::DeviceKey;
 pub struct Settings {
     /// The power saver switch.
     pub rgb_economy: bool,
+    /// The first-open welcome page has been shown.
+    pub welcome_seen: bool,
     /// Devices the user hid from the flyout and the icon (the registry's removed list).
     pub hidden: Vec<DeviceKey>,
     /// The lighting level kept for each device the economy turned down (device key, `SavedLight` text).
@@ -38,6 +42,7 @@ impl Settings {
             };
             match (name.trim(), value.trim()) {
                 ("rgb_economy", v) => s.rgb_economy = v == "1",
+                ("welcome_seen", v) => s.welcome_seen = v == "1",
                 ("hidden", v) if !v.is_empty() => {
                     let key = DeviceKey(v.to_string());
                     if !s.hidden.contains(&key) {
@@ -63,7 +68,11 @@ impl Settings {
     }
 
     pub fn encode(&self) -> String {
-        let mut out = format!("rgb_economy={}\n", u8::from(self.rgb_economy));
+        let mut out = format!(
+            "rgb_economy={}\nwelcome_seen={}\n",
+            u8::from(self.rgb_economy),
+            u8::from(self.welcome_seen)
+        );
         for key in &self.hidden {
             out.push_str("hidden=");
             out.push_str(&key.0);
@@ -96,12 +105,30 @@ mod tests {
     fn a_missing_or_empty_file_is_the_defaults() {
         assert_eq!(Settings::parse(""), Settings::default());
         assert!(!Settings::default().rgb_economy);
+        assert!(
+            !Settings::default().welcome_seen,
+            "a first run has not seen the welcome page"
+        );
+    }
+
+    #[test]
+    fn the_welcome_flag_is_kept_and_an_old_file_without_it_has_not_seen_it() {
+        assert!(Settings::parse("welcome_seen=1\n").welcome_seen);
+        assert!(!Settings::parse("welcome_seen=0\n").welcome_seen);
+        assert!(!Settings::parse("rgb_economy=1\n").welcome_seen);
+        let s = Settings {
+            welcome_seen: true,
+            ..Settings::default()
+        };
+        assert_eq!(s.encode(), "rgb_economy=0\nwelcome_seen=1\n");
+        assert!(Settings::parse(&s.encode()).welcome_seen);
     }
 
     #[test]
     fn the_settings_round_trip() {
         let s = Settings {
             rgb_economy: true,
+            welcome_seen: true,
             hidden: vec![
                 DeviceKey("logitech-hidpp:0AB5".into()),
                 DeviceKey("os-bluetooth:ab:cd".into()),
@@ -114,7 +141,7 @@ mod tests {
         let text = s.encode();
         assert_eq!(
             text,
-            "rgb_economy=1\nhidden=logitech-hidpp:0AB5\nhidden=os-bluetooth:ab:cd\nlight=logitech-hidpp:40B5 brightness:13\n"
+            "rgb_economy=1\nwelcome_seen=1\nhidden=logitech-hidpp:0AB5\nhidden=os-bluetooth:ab:cd\nlight=logitech-hidpp:40B5 brightness:13\n"
         );
         assert_eq!(Settings::parse(&text), s);
     }

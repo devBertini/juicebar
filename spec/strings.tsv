@@ -72,3 +72,10 @@ stat_of_use	of use	de uso
 stat_health	Battery health	Saúde da bateria
 rgb_saver_info	Turns off the lights (LEDs) of supported devices so their batteries last longer	Desliga as luzes (LEDs) dos dispositivos compatíveis para a bateria durar mais
 lighting_reapplied	G HUB is reapplying the lighting	o G HUB está reaplicando a iluminação
+chart_usage_by_day	Hours of use per day	Horas de uso por dia
+welcome_title	Welcome to JuiceBar	Boas-vindas ao JuiceBar
+welcome_body	JuiceBar shows the battery of your mouse, keyboard, headset and controllers in one place, and warns you before one runs out.	O JuiceBar mostra a bateria do mouse, do teclado, do headset e dos controles em um só lugar e avisa antes que alguma acabe.
+welcome_tray_title	Keep the icon next to the clock	Deixe o ícone ao lado do relógio
+welcome_tray_steps	Open Settings > Personalization > Taskbar > Other system tray icons and turn on JuiceBar. Or drag it from the ^ arrow onto the taskbar.	Abra Configurações > Personalização > Barra de tarefas > Outros ícones da bandeja do sistema e ative o JuiceBar. Ou arraste-o da seta ^ para a barra de tarefas.
+welcome_credit	Created by Claudio Bertini	Idealizado por Claudio Bertini
+welcome_start	Get started	Começar

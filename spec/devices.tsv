@@ -9,30 +9,31 @@
 # curve        the voltage-to-percent curve id in spec/curves.tsv, or "-" when the device gives a percent
 # use_h        rated hours of use, lighting off (Logitech's figure); use_h_rgb the same with lighting on; charge_h rated hours to charge
 # source       where the ratings and ids come from (docs/research/ file and section)
-provider	match	id	model	kind	battery	curve	use_h	use_h_rgb	charge_h	source
-logitech-hidpp	receiver	C539	LIGHTSPEED Receiver	other	-	-	-	-	-	probe-windows.md (measured 26/10/2026)
-logitech-hidpp	receiver	C547	LIGHTSPEED Receiver	other	-	-	-	-	-	probe-windows.md (measured 26/10/2026)
-logitech-hidpp	wpid	4086	G703 LIGHTSPEED	mouse	hidpp-0x1001	g703	30	22	-	probe-windows.md; hidpp-and-lighting.md section 4 (support article 360023176314)
-logitech-hidpp	wpid	40B5	G915 X LIGHTSPEED	keyboard	hidpp-0x1004	-	800	36	-	probe-windows.md; hidpp-and-lighting.md section 4 (36 h at 100 % RGB brightness)
-logitech-hidpp	dongle	0AB5	G733	headset	hidpp-0x1f20	g733	29	20	-	brand ids: HeadsetControl facts in hidpp-and-lighting.md; ratings section 4
-logitech-hidpp	dongle	0AFE	G733	headset	hidpp-0x1f20	g733	29	20	-	probe-windows.md (measured 26/10/2026)
-logitech-hidpp	dongle	0B1F	G733	headset	hidpp-0x1f20	g733	29	20	-	HeadsetControl facts in hidpp-and-lighting.md
-logitech-hidpp	usb	C356	G915 X LIGHTSPEED	keyboard	hidpp-0x1004	-	800	36	-	probe-windows.md (the keyboard on its charging cable, measured 26/10/2026); same device as wpid 40B5
-game-controllers	sony	0CE6	DualSense	gamepad	hid-ds5	-	-	-	-	docs/research/controllers.md section 1a (SDL usb_ids.h USB_PRODUCT_SONY_DS5)
-game-controllers	sony	0DF2	DualSense Edge	gamepad	hid-ds5	-	-	-	-	docs/research/controllers.md section 1a (USB_PRODUCT_SONY_DS5_EDGE)
-game-controllers	microsoft	028E	Xbox 360 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX360_WIRED_CONTROLLER; docs/research/controllers.md section 2
-game-controllers	microsoft	02A1	Xbox 360 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX360_XUSB_CONTROLLER (XUSB driver software PID)
-game-controllers	microsoft	02E3	Xbox Elite Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ELITE_SERIES_1
-game-controllers	microsoft	0B00	Xbox Elite Series 2 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ELITE_SERIES_2
-game-controllers	microsoft	0B05	Xbox Elite Series 2 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ELITE_SERIES_2_BLUETOOTH
-game-controllers	microsoft	0B22	Xbox Elite Series 2 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ELITE_SERIES_2_BLE
-game-controllers	microsoft	02EA	Xbox One S Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_S
-game-controllers	microsoft	02E0	Xbox One S Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_S_REV1_BLUETOOTH
-game-controllers	microsoft	02FD	Xbox One S Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_S_REV2_BLUETOOTH
-game-controllers	microsoft	0B20	Xbox One S Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_S_REV2_BLE
-game-controllers	microsoft	0B12	Xbox Series Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_SERIES_X
-game-controllers	microsoft	0B13	Xbox Series Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_SERIES_X_BLE
-game-controllers	microsoft	0B0A	Xbox Adaptive Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ADAPTIVE
-game-controllers	microsoft	0B0C	Xbox Adaptive Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ADAPTIVE_BLUETOOTH
-game-controllers	microsoft	0B21	Xbox Adaptive Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ADAPTIVE_BLE
-game-controllers	microsoft	02FF	Xbox One Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_XBOXGIP_CONTROLLER (XBOXGIP driver software PID)
+# short        the short name the panel, the tooltip and the notices show (the model without the family or the kind of product: G703, G915 X, DualSense); "-" for a receiver, which is never shown as a device
+provider	match	id	model	kind	battery	curve	use_h	use_h_rgb	charge_h	source	short
+logitech-hidpp	receiver	C539	LIGHTSPEED Receiver	other	-	-	-	-	-	probe-windows.md (measured 26/10/2026)	-
+logitech-hidpp	receiver	C547	LIGHTSPEED Receiver	other	-	-	-	-	-	probe-windows.md (measured 26/10/2026)	-
+logitech-hidpp	wpid	4086	G703 LIGHTSPEED	mouse	hidpp-0x1001	g703	30	22	-	probe-windows.md; hidpp-and-lighting.md section 4 (support article 360023176314)	G703
+logitech-hidpp	wpid	40B5	G915 X LIGHTSPEED	keyboard	hidpp-0x1004	-	800	36	-	probe-windows.md; hidpp-and-lighting.md section 4 (36 h at 100 % RGB brightness)	G915 X
+logitech-hidpp	dongle	0AB5	G733	headset	hidpp-0x1f20	g733	29	20	-	brand ids: HeadsetControl facts in hidpp-and-lighting.md; ratings section 4	G733
+logitech-hidpp	dongle	0AFE	G733	headset	hidpp-0x1f20	g733	29	20	-	probe-windows.md (measured 26/10/2026)	G733
+logitech-hidpp	dongle	0B1F	G733	headset	hidpp-0x1f20	g733	29	20	-	HeadsetControl facts in hidpp-and-lighting.md	G733
+logitech-hidpp	usb	C356	G915 X LIGHTSPEED	keyboard	hidpp-0x1004	-	800	36	-	probe-windows.md (the keyboard on its charging cable, measured 26/10/2026); same device as wpid 40B5	G915 X
+game-controllers	sony	0CE6	DualSense	gamepad	hid-ds5	-	-	-	-	docs/research/controllers.md section 1a (SDL usb_ids.h USB_PRODUCT_SONY_DS5)	DualSense
+game-controllers	sony	0DF2	DualSense Edge	gamepad	hid-ds5	-	-	-	-	docs/research/controllers.md section 1a (USB_PRODUCT_SONY_DS5_EDGE)	DualSense Edge
+game-controllers	microsoft	028E	Xbox 360 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX360_WIRED_CONTROLLER; docs/research/controllers.md section 2	Xbox 360
+game-controllers	microsoft	02A1	Xbox 360 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX360_XUSB_CONTROLLER (XUSB driver software PID)	Xbox 360
+game-controllers	microsoft	02E3	Xbox Elite Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ELITE_SERIES_1	Xbox Elite
+game-controllers	microsoft	0B00	Xbox Elite Series 2 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ELITE_SERIES_2	Xbox Elite 2
+game-controllers	microsoft	0B05	Xbox Elite Series 2 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ELITE_SERIES_2_BLUETOOTH	Xbox Elite 2
+game-controllers	microsoft	0B22	Xbox Elite Series 2 Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ELITE_SERIES_2_BLE	Xbox Elite 2
+game-controllers	microsoft	02EA	Xbox One S Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_S	Xbox One S
+game-controllers	microsoft	02E0	Xbox One S Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_S_REV1_BLUETOOTH	Xbox One S
+game-controllers	microsoft	02FD	Xbox One S Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_S_REV2_BLUETOOTH	Xbox One S
+game-controllers	microsoft	0B20	Xbox One S Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_S_REV2_BLE	Xbox One S
+game-controllers	microsoft	0B12	Xbox Series Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_SERIES_X	Xbox Controller
+game-controllers	microsoft	0B13	Xbox Series Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_SERIES_X_BLE	Xbox Controller
+game-controllers	microsoft	0B0A	Xbox Adaptive Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ADAPTIVE	Xbox Adaptive
+game-controllers	microsoft	0B0C	Xbox Adaptive Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ADAPTIVE_BLUETOOTH	Xbox Adaptive
+game-controllers	microsoft	0B21	Xbox Adaptive Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_ADAPTIVE_BLE	Xbox Adaptive
+game-controllers	microsoft	02FF	Xbox One Controller	gamepad	wgi	-	-	-	-	SDL usb_ids.h USB_PRODUCT_XBOX_ONE_XBOXGIP_CONTROLLER (XBOXGIP driver software PID)	Xbox Controller

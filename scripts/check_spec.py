@@ -4,8 +4,8 @@
 
   python3 -B scripts/check_spec.py        (exit 0 when every file passes; one line per problem otherwise)
 
-Checks: devices.tsv columns and values, every curve it names exists in curves.tsv, curves sorted and rising,
-estimator-cases.tsv has its header and the same number of cells on every row, every fixture line is a note or a
+Checks: devices.tsv columns and values (the short name every shown device needs), every curve it names exists in
+curves.tsv, curves sorted and rising, estimator-cases.tsv has its header and the same number of cells on every row, every fixture line is a note or a
 whole HID++ report of a known length. Python 3.9 standard library only.
 """
 import os
@@ -61,7 +61,7 @@ def check_curves(problems):
 
 def check_devices(curves, problems):
     data = rows(os.path.join(SPEC, "devices.tsv"))
-    header = ["provider", "match", "id", "model", "kind", "battery", "curve", "use_h", "use_h_rgb", "charge_h", "source"]
+    header = ["provider", "match", "id", "model", "kind", "battery", "curve", "use_h", "use_h_rgb", "charge_h", "source", "short"]
     if not data or data[0][1] != header:
         problems.append("devices.tsv: header must be " + ", ".join(header))
         return
@@ -93,6 +93,12 @@ def check_devices(curves, problems):
         for col in (7, 8, 9):
             if c[col] != "-" and not re.fullmatch(r"\d+(\.\d+)?", c[col]):
                 problems.append("%s: %s must be a number or -" % (where, header[col]))
+        short = c[11]
+        if c[1] == "receiver":
+            if short != "-":
+                problems.append("%s: a receiver is never shown, its short name must be -" % where)
+        elif not short.strip() or short == "-" or short != short.strip() or len(short) > 16:
+            problems.append("%s: short must be a name of 1 to 16 characters, no edge spaces (and never -)" % where)
 
 
 def check_cases(problems):

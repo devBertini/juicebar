@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Paints the flyout onto a `Canvas`. The window and the PNG seam both call `paint_flyout`, so a
 //! render is what the user sees (apart from the system backdrop, replaced by a solid panel).
+//!
+//! The look: the panel is the system's acrylic (or, where Windows has transparency effects off, a
+//! solid panel we paint), a soft glow at its top in the juice color of the tray mark (purple,
+//! green or red), and one light glass card per device. Tiles, capsules and the chart take the
+//! mark's juice colors, never the system accent; only the switch keeps the accent.
 
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
@@ -10,8 +15,12 @@ use windows::core::Result;
 
 use crate::gfx::{Align, Canvas, Color, Gfx, IDENTITY, mul, rotate_about, scale_translate};
 use crate::glyphs::{self, Shape};
-use crate::layout::{DetailGeom, FlyoutHit, Layout, Metrics, Rect, RowGeom};
-use crate::model::{Glyph, Rgb, Theme, UiDevice, UiState};
+use crate::icon::{self, Frame, IconLook, Juice};
+use crate::layout::{
+    DetailGeom, FlyoutHit, INFO_TEXT_W, Layout, Metrics, Rect, RowGeom, WELCOME_STEPS_W,
+    WELCOME_TEXT_W, WIDTH,
+};
+use crate::model::{Glyph, Rgb, Theme, UiDevice, UiState, UiWelcome};
 
 /// The product name in the header; every other label comes from `UiState::labels`.
 pub const TITLE: &str = "JuiceBar";
@@ -19,6 +28,7 @@ pub const TITLE: &str = "JuiceBar";
 /// The theme's colors (the mockup's Windows tokens, `spec/design/DESIGN.md`).
 #[derive(Clone, Copy)]
 pub struct Palette {
+    pub dark: bool,
     pub panel: Color,
     pub fg: Color,
     pub fg2: Color,
@@ -36,6 +46,13 @@ pub struct Palette {
     pub off_fg: Color,
     /// Solid color under the card, for the "now" dot's ring.
     pub card_solid: Color,
+    /// A device's glass card: white (light) or a faint white (dark) at low alpha.
+    pub card: Color,
+    pub card_open: Color,
+    pub card_hover: Color,
+    pub card_edge: Color,
+    /// The opaque surface of the (i) bubble.
+    pub bubble: Color,
 }
 
 impl Palette {
@@ -44,6 +61,7 @@ impl Palette {
             Color::hex(((accent.0 as u32) << 16) | ((accent.1 as u32) << 8) | accent.2 as u32);
         match theme {
             Theme::Light => Palette {
+                dark: false,
                 panel: Color::hex(0xf3f3f6),
                 fg: Color::hex(0x1d1d1f),
                 fg2: Color::rgba(0x1d1d1f, 0.62),
@@ -60,8 +78,14 @@ impl Palette {
                 off_bg: Color::rgba(0x3c3c43, 0.14),
                 off_fg: Color::rgba(0x1d1d1f, 0.55),
                 card_solid: Color::hex(0xfbfbfc),
+                card: Color::rgba(0xffffff, 0.62),
+                card_open: Color::rgba(0xffffff, 0.78),
+                card_hover: Color::rgba(0xffffff, 0.84),
+                card_edge: Color::rgba(0x000000, 0.08),
+                bubble: Color::hex(0xfbfbfc),
             },
             Theme::Dark => Palette {
+                dark: true,
                 panel: Color::hex(0x262629),
                 fg: Color::hex(0xf5f5f7),
                 fg2: Color::rgba(0xf5f5f7, 0.64),
@@ -78,8 +102,18 @@ impl Palette {
                 off_bg: Color::rgba(0xffffff, 0.14),
                 off_fg: Color::rgba(0xf5f5f7, 0.55),
                 card_solid: Color::hex(0x2d2d31),
+                card: Color::rgba(0xffffff, 0.065),
+                card_open: Color::rgba(0xffffff, 0.09),
+                card_hover: Color::rgba(0xffffff, 0.12),
+                card_edge: Color::rgba(0xffffff, 0.10),
+                bubble: Color::hex(0x38383e),
             },
         }
+    }
+
+    /// The juice colors of the tray mark, as the mark draws them on a taskbar of this theme.
+    pub fn juice(&self, juice: Juice) -> Color {
+        icon::juice_color(juice, self.dark)
     }
 
     /// Dark text on a light fill, white on a dark one.
@@ -89,6 +123,11 @@ impl Palette {
         } else {
             Color::hex(0xffffff)
         }
+    }
+
+    /// The glow at the top of the panel: the state's juice color at about 12 to 20 % alpha.
+    pub fn glow(&self, juice: Juice) -> Color {
+        self.juice(juice).fade(if self.dark { 0.20 } else { 0.17 })
     }
 }
 
@@ -135,6 +174,8 @@ struct Fonts {
     stat: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
     rgb: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
     kbd: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
+    welcome: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
+    body: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
 }
 
 impl Fonts {
@@ -156,16 +197,33 @@ impl Fonts {
             stat: g.text_format(false, s, 12.5)?,
             rgb: g.text_format(false, m, 13.0)?,
             kbd: g.text_format(false, n, 11.5)?,
+            welcome: g.text_format(true, s, 19.0)?,
+            body: g.text_format(false, n, 13.0)?,
         })
     }
 }
 
-/// Measures the two texts the layout needs: the RGB label and the hotkey hint.
+/// Measures what the layout needs: the footer label and hotkey widths and the heights of the
+/// wrapped texts (the (i) bubble and, on the first open, the welcome page).
 pub fn measure_metrics(g: &Gfx, state: &UiState) -> Result<Metrics> {
     let f = Fonts::new(g)?;
+    let d = Metrics::default();
+    let (welcome_body_h, welcome_steps_h) = match &state.welcome {
+        Some(w) => (
+            g.measure_wrapped(&w.body, &f.body, WELCOME_TEXT_W)?.ceil(),
+            g.measure_wrapped(&w.tray_steps, &f.conn, WELCOME_STEPS_W)?
+                .ceil(),
+        ),
+        None => (d.welcome_body_h, d.welcome_steps_h),
+    };
     Ok(Metrics {
         rgb_label_w: g.measure(&state.labels.rgb_economy, &f.rgb)?.0.ceil(),
         hotkey_w: g.measure(&state.hotkey_text, &f.kbd)?.0.ceil(),
+        info_h: g
+            .measure_wrapped(&state.labels.rgb_info, &f.small, INFO_TEXT_W)?
+            .ceil(),
+        welcome_body_h,
+        welcome_steps_h,
     })
 }
 
@@ -237,7 +295,13 @@ pub fn paint_flyout(
     let full = Rect::new(0.0, 0.0, layout.width, layout.height);
     if opts.solid_panel {
         c.fill_rrect(full, 8.0, p.panel);
+    }
+    paint_glow(c, &p, state.juice, full)?;
+    if opts.solid_panel {
         c.stroke_rrect(full, 8.0, c.hairline(), p.stroke);
+    }
+    if let (Some(w), Some(page)) = (&layout.welcome, &state.welcome) {
+        return paint_welcome(c, state, &p, &f, w, page, opts.hover);
     }
 
     // Header.
@@ -298,7 +362,35 @@ pub fn paint_flyout(
         );
     }
 
-    // Footer.
+    paint_footer(c, state, layout, &p, &f, opts.hover)
+}
+
+/// The soft glow at the top of the panel: a wide ellipse centered on the top edge that fades out.
+fn paint_glow(c: &Canvas, p: &Palette, juice: Juice, full: Rect) -> Result<()> {
+    let glow = p.glow(juice);
+    c.fill_rrect_radial(
+        full,
+        8.0,
+        (full.w / 2.0, -6.0),
+        full.w * 0.95,
+        full.h.min(300.0),
+        &[
+            (0.0, glow),
+            (0.4, glow.fade(0.5)),
+            (0.75, glow.fade(0.14)),
+            (1.0, glow.fade(0.0)),
+        ],
+    )
+}
+
+fn paint_footer(
+    c: &Canvas,
+    state: &UiState,
+    layout: &Layout,
+    p: &Palette,
+    f: &Fonts,
+    hover: FlyoutHit,
+) -> Result<()> {
     let ft = &layout.footer;
     let y = c.snap(ft.line_y);
     c.line(
@@ -308,10 +400,17 @@ pub fn paint_flyout(
         p.hair,
         None,
     );
-    if opts.hover == FlyoutHit::RgbSwitch {
+    if hover == FlyoutHit::RgbSwitch {
         c.fill_rrect(ft.switch_hit, 6.0, p.hover);
     }
-    draw_glyph(c, Glyph::Leaf, ft.icon, p.green, false, glyphs::STROKE)?;
+    draw_glyph(
+        c,
+        Glyph::Leaf,
+        ft.icon,
+        p.juice(Juice::Green),
+        false,
+        glyphs::STROKE,
+    )?;
     c.text_in(
         &state.labels.rgb_economy,
         &f.rgb,
@@ -319,10 +418,65 @@ pub fn paint_flyout(
         Align::Left,
         p.fg,
     )?;
-    paint_switch(c, &p, ft.switch, state.rgb_economy);
+    let info_on = hover == FlyoutHit::Info || state.info_open;
+    paint_info_icon(c, p, ft.info, info_on);
+    paint_switch(c, p, ft.switch, state.rgb_economy);
     c.fill_rrect(ft.hotkey, 4.0, p.tile);
     c.stroke_rrect(ft.hotkey, 4.0, c.hairline(), p.stroke);
     c.text_in(&state.hotkey_text, &f.kbd, ft.hotkey, Align::Center, p.fg2)?;
+    if let (Some(r), Some(text)) = (ft.ghub, state.ghub_notice.as_ref()) {
+        c.text_in(text, &f.small, r, Align::Left, p.orange)?;
+    }
+    if info_on {
+        paint_info_bubble(c, state, p, f, ft.bubble, ft.info)?;
+    }
+    Ok(())
+}
+
+/// The small (i): a ring with a dot and a stem.
+fn paint_info_icon(c: &Canvas, p: &Palette, r: Rect, on: bool) {
+    let color = if on { p.fg } else { p.fg3 };
+    let (cx, cy) = (r.x + r.w / 2.0, r.cy());
+    c.stroke_circle(cx, cy, r.w / 2.0 - 0.75, 1.2, color);
+    c.fill_circle(cx, cy - 3.6, 0.95, color);
+    c.line((cx, cy - 1.0), (cx, cy + 4.0), 1.4, color, None);
+}
+
+/// What the (i) says, in a bubble above the footer with its tip on the (i).
+fn paint_info_bubble(
+    c: &Canvas,
+    state: &UiState,
+    p: &Palette,
+    f: &Fonts,
+    bubble: Rect,
+    info: Rect,
+) -> Result<()> {
+    c.fill_rrect(bubble, 8.0, p.bubble);
+    let tip_x = (info.x + info.w / 2.0).clamp(bubble.x + 16.0, bubble.right() - 16.0);
+    let by = bubble.bottom();
+    let caret = c.polyline(
+        &[
+            (tip_x - 6.0, by - 0.5),
+            (tip_x + 6.0, by - 0.5),
+            (tip_x, by + 5.5),
+        ],
+        true,
+        true,
+    )?;
+    c.fill_geometry(&caret.into(), p.bubble);
+    c.stroke_rrect(bubble, 8.0, c.hairline(), p.card_edge);
+    c.text_wrapped(
+        &state.labels.rgb_info,
+        &f.small,
+        Rect::new(
+            bubble.x + 12.0,
+            bubble.y + 10.0,
+            INFO_TEXT_W,
+            bubble.h - 20.0,
+        ),
+        Align::Left,
+        p.fg,
+    )?;
     Ok(())
 }
 
@@ -337,6 +491,52 @@ fn paint_switch(c: &Canvas, p: &Palette, r: Rect, on: bool) {
     }
 }
 
+/// The first-open page: the mark, a welcome, what JuiceBar does, how to keep its icon next to the
+/// clock, who made it, and the button.
+fn paint_welcome(
+    c: &Canvas,
+    state: &UiState,
+    p: &Palette,
+    f: &Fonts,
+    w: &crate::layout::WelcomeGeom,
+    page: &UiWelcome,
+    hover: FlyoutHit,
+) -> Result<()> {
+    c.set_transform(scale_translate(1.0, w.mark.x, w.mark.y));
+    let look = IconLook {
+        juice: state.juice,
+        charging: false,
+    };
+    let drawn = icon::draw_mark(c, look, &Frame::STILL, p.dark, w.mark.w);
+    c.set_transform(IDENTITY);
+    drawn?;
+    c.text_in(&page.title, &f.welcome, w.title, Align::Left, p.fg)?;
+    c.text_wrapped(&page.body, &f.body, w.body, Align::Left, p.fg)?;
+
+    c.fill_rrect(w.tray_card, 8.0, p.card_open);
+    c.stroke_rrect(w.tray_card, 8.0, c.hairline(), p.card_edge);
+    c.text_in(&page.tray_title, &f.stat, w.tray_title, Align::Left, p.fg)?;
+    c.text_wrapped(&page.tray_steps, &f.conn, w.tray_steps, Align::Left, p.fg2)?;
+
+    c.text_in(&page.credit, &f.small, w.credit, Align::Left, p.fg3)?;
+
+    let fill = if hover == FlyoutHit::Start {
+        Color::hex(0x9456bd)
+    } else {
+        Color::hex(0x7e3fa8)
+    };
+    c.fill_rrect(w.button, 6.0, fill);
+    c.text_in(
+        &page.start,
+        &f.rgb,
+        w.button,
+        Align::Center,
+        Color::hex(0xffffff),
+    )?;
+    debug_assert!(w.button.right() <= WIDTH);
+    Ok(())
+}
+
 fn paint_row(
     c: &Canvas,
     state: &UiState,
@@ -347,25 +547,26 @@ fn paint_row(
 ) -> Result<()> {
     let d = &state.devices[row.index];
     let t = tone(state, d);
-    if let Some(card) = row.card {
-        c.fill_rrect(card, 8.0, p.tile);
-        c.stroke_rrect(card, 8.0, c.hairline(), p.stroke);
-    } else if hover == FlyoutHit::Row(row.index) {
-        c.fill_rrect(row.bounds, 6.0, p.hover);
-    }
 
-    // Glyph tile.
+    // The glass card: every device has one; an open one is a little more present, an off one quieter.
+    let card = if row.detail.is_some() {
+        p.card_open
+    } else if hover == FlyoutHit::Row(row.index) {
+        p.card_hover
+    } else {
+        p.card
+    };
+    let quiet = if t == Tone::Off { 0.7 } else { 1.0 };
+    c.fill_rrect(row.bounds, 8.0, card.fade(quiet));
+    c.stroke_rrect(row.bounds, 8.0, c.hairline(), p.card_edge);
+
+    // Glyph tile: a neutral tint of the mark's juice (grape for a device that is on, green while it
+    // charges, red when low), never the system accent.
+    let juice_of = |j| p.juice(j);
     let (bg, fg) = match t {
-        Tone::On => (p.accent, p.on(p.accent)),
-        Tone::Charging => (p.green, p.on(p.green)),
-        Tone::Low => (
-            p.red,
-            if state.theme == Theme::Dark {
-                Color::hex(0x2a0a0e)
-            } else {
-                p.on(p.red)
-            },
-        ),
+        Tone::On => (juice_of(Juice::Purple).fade(0.2), juice_of(Juice::Purple)),
+        Tone::Charging => (juice_of(Juice::Green).fade(0.2), juice_of(Juice::Green)),
+        Tone::Low => (juice_of(Juice::Red).fade(0.2), juice_of(Juice::Red)),
         Tone::Off => (p.off_bg, p.off_fg),
     };
     c.fill_rrect(row.icon, 8.0, bg);
@@ -393,15 +594,19 @@ fn paint_row(
         }
     }
 
-    // Capsule.
+    // Capsule: the track always, the fill only with a reading.
     let cap = row.capsule;
     c.fill_rrect(cap, 2.0, p.fill);
-    let frac = d.capsule_fraction.clamp(0.0, 1.0);
+    let frac = if d.percent.is_some() {
+        d.capsule_fraction.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     if frac > 0.0 {
         let fill = match t {
-            Tone::On => p.fg.fade(0.82),
-            Tone::Low => p.red,
-            Tone::Charging => p.green,
+            Tone::On => juice_of(Juice::Purple),
+            Tone::Low => juice_of(Juice::Red),
+            Tone::Charging => juice_of(Juice::Green),
             Tone::Off => p.fg.fade(0.3),
         };
         c.fill_rrect(
@@ -432,30 +637,40 @@ fn paint_row(
         p.fg2,
     )?;
 
-    // Percent: big digits, a small "%" on the same baseline.
+    // Percent: big digits, a small "%" on the same baseline; without a reading a quiet dash.
     let pc = row.percent;
-    let color = match t {
-        Tone::Low => p.red,
-        Tone::Off => p.fg2,
-        _ => p.fg,
-    };
-    let digits = c.text_layout(&d.percent.to_string(), &f.pct, pc.w, pc.h, Align::Left)?;
-    let sign = c.text_layout("%", &f.pct_small, pc.w, pc.h, Align::Left)?;
-    let total = digits.w + 1.0 + sign.w;
-    let x = pc.right() - total;
-    let top = pc.cy() - digits.h / 2.0;
-    c.draw_text_at(&digits, x, top, color);
-    c.draw_text_at(
-        &sign,
-        x + digits.w + 1.0,
-        top + digits.baseline - sign.baseline,
-        p.fg2,
-    );
+    match d.percent {
+        Some(percent) => {
+            let color = match t {
+                Tone::Low => p.red,
+                Tone::Off => p.fg2,
+                _ => p.fg,
+            };
+            let digits = c.text_layout(&percent.to_string(), &f.pct, pc.w, pc.h, Align::Left)?;
+            let sign = c.text_layout("%", &f.pct_small, pc.w, pc.h, Align::Left)?;
+            let total = digits.w + 1.0 + sign.w;
+            let x = pc.right() - total;
+            let top = pc.cy() - digits.h / 2.0;
+            c.draw_text_at(&digits, x, top, color);
+            c.draw_text_at(
+                &sign,
+                x + digits.w + 1.0,
+                top + digits.baseline - sign.baseline,
+                p.fg2,
+            );
+        }
+        None => c.text_in("\u{2013}", &f.pct, pc, Align::Right, p.fg3)?,
+    }
 
     if let Some(detail) = &row.detail {
         paint_detail(c, state, p, f, d, detail)?;
     }
     Ok(())
+}
+
+/// Scale of the week's bars: the largest day rounded up to a whole hour, at least one.
+pub fn week_scale(hours: &[f32; 7]) -> f32 {
+    hours.iter().copied().fold(0.0f32, f32::max).ceil().max(1.0)
 }
 
 fn paint_detail(
@@ -466,6 +681,7 @@ fn paint_detail(
     d: &UiDevice,
     g: &DetailGeom,
 ) -> Result<()> {
+    let purple = p.juice(Juice::Purple);
     if let (Some(w), Some(msg)) = (g.warn, d.warning.as_ref()) {
         c.fill_rrect(w, 4.0, p.orange.fade(0.14));
         draw_glyph(
@@ -561,20 +777,20 @@ fn paint_detail(
             &ag.into(),
             ch.plot.y,
             ch.plot.bottom(),
-            p.accent.fade(0.34),
-            p.accent.fade(0.0),
+            purple.fade(0.34),
+            purple.fade(0.0),
         )?;
         c.pop_clip();
         let lg = c.polyline(&pts, false, false)?;
-        c.stroke_geometry(&lg.into(), 1.4, p.accent, None);
+        c.stroke_geometry(&lg.into(), 1.4, purple, None);
     }
     if let Some((h, pc)) = d.forecast_from {
         let (x0, y0) = (ch.x_of(h), ch.y_of(pc));
         let x1 = ch.x_of(d.forecast_empty_hours);
         c.line((x0, y0), (x1, ch.y_of(0.0)), 1.5, p.red, Some(&dash));
-        c.fill_circle(x0, y0, 3.0, p.accent);
+        c.fill_circle(x0, y0, 3.0, purple);
         c.stroke_circle(x0, y0, 3.0, 1.5, p.card_solid);
-        c.fill_circle(x0, y0, 2.25, p.accent);
+        c.fill_circle(x0, y0, 2.25, purple);
     }
     for (i, label) in state.day_labels.iter().enumerate() {
         let x = ch.x_of(-168.0 + 12.0 + i as f32 * 24.0);
@@ -623,5 +839,118 @@ fn paint_detail(
         .health
         .map_or_else(|| state.labels.learning.clone(), |h| format!("{h}%"));
     c.text_in(&health, &f.stat, value_row(g.health), Align::Left, p.fg)?;
+
+    paint_week_bars(c, state, p, f, d, g)
+}
+
+/// Hours of use on each of the last 7 days: small rounded bars on a common scale, today's solid,
+/// the weekday under each, the scale (the tallest whole hour) at the right of the title.
+fn paint_week_bars(
+    c: &Canvas,
+    state: &UiState,
+    p: &Palette,
+    f: &Fonts,
+    d: &UiDevice,
+    g: &DetailGeom,
+) -> Result<()> {
+    let purple = p.juice(Juice::Purple);
+    c.text_in(
+        &state.labels.usage_by_day,
+        &f.small,
+        Rect::new(g.bars_title.x + 2.0, g.bars_title.y, 200.0, g.bars_title.h),
+        Align::Left,
+        p.fg2,
+    )?;
+    let scale = week_scale(&d.week_hours);
+    c.text_in(
+        &format!("{} h", scale as u32),
+        &f.axis,
+        Rect::new(
+            g.bars_title.right() - 60.0,
+            g.bars_title.y,
+            58.0,
+            g.bars_title.h,
+        ),
+        Align::Right,
+        p.fg3,
+    )?;
+    let label_h = 12.0;
+    let base = g.bars.bottom() - label_h - 3.0;
+    let max_h = base - g.bars.y;
+    for (i, hours) in d.week_hours.iter().enumerate() {
+        let slot = g.bar_slot(i);
+        let today = i == 6;
+        let bar_w = 14.0;
+        let bar_h = if *hours <= 0.0 {
+            2.0
+        } else {
+            (hours / scale * max_h).clamp(3.0, max_h)
+        };
+        let r = Rect::new(slot.x + (slot.w - bar_w) / 2.0, base - bar_h, bar_w, bar_h);
+        let color = if *hours <= 0.0 {
+            p.fill
+        } else if today {
+            purple
+        } else {
+            purple.fade(0.5)
+        };
+        c.fill_rrect(r, 3.0_f32.min(bar_h / 2.0), color);
+        if let Some(label) = state.usage_labels.get(i) {
+            c.text_in(
+                label,
+                &f.axis,
+                Rect::new(slot.x, base + 3.0, slot.w, label_h),
+                Align::Center,
+                if today { p.fg } else { p.fg3 },
+            )?;
+        }
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_week_scale_is_the_tallest_day_rounded_up_and_at_least_one_hour() {
+        assert_eq!(week_scale(&[0.0; 7]), 1.0);
+        assert_eq!(week_scale(&[0.2, 0.4, 0.0, 0.0, 0.0, 0.0, 0.1]), 1.0);
+        assert_eq!(week_scale(&[3.2, 5.1, 4.6, 6.0, 1.4, 0.8, 4.2]), 6.0);
+        assert_eq!(week_scale(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 7.01]), 8.0);
+    }
+
+    #[test]
+    fn the_glow_is_subtle_in_both_themes_and_follows_the_juice() {
+        for theme in [Theme::Light, Theme::Dark] {
+            let p = Palette::new(theme, Rgb(0, 0x67, 0xc0));
+            for j in [Juice::Purple, Juice::Green, Juice::Red] {
+                let g = p.glow(j);
+                assert!(
+                    (0.12..=0.20).contains(&g.a),
+                    "{theme:?} {j:?} alpha {}",
+                    g.a
+                );
+            }
+            let (pu, gr, re) = (
+                p.glow(Juice::Purple),
+                p.glow(Juice::Green),
+                p.glow(Juice::Red),
+            );
+            assert!(pu != gr && gr != re && pu != re);
+        }
+    }
+
+    #[test]
+    fn glass_cards_are_faint_and_a_tile_never_uses_the_accent() {
+        let light = Palette::new(Theme::Light, Rgb(0xe8, 0x11, 0x23));
+        let dark = Palette::new(Theme::Dark, Rgb(0xe8, 0x11, 0x23));
+        assert!(light.card.a < 0.7 && dark.card.a < 0.1);
+        assert!(light.card_edge.a <= 0.1 && dark.card_edge.a <= 0.1);
+        // The glyph tile tints come from the mark's juice colors: a red system accent cannot reach them.
+        for p in [light, dark] {
+            let purple = p.juice(Juice::Purple);
+            assert!(purple != p.accent && purple != p.red);
+        }
+    }
 }

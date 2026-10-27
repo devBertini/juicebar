@@ -118,6 +118,57 @@ pub fn rows() -> &'static [Row] {
     })
 }
 
+/// USB vendor ids of the game-pad vendors the catalog names by vendor (`sony`, `microsoft`).
+const SONY_VID: u16 = 0x054C;
+const MICROSOFT_VID: u16 = 0x045E;
+
+/// Short names of every catalog row that is a shown device: (provider, match, product id, short).
+fn shorts() -> &'static [(&'static str, &'static str, u16, &'static str)] {
+    static SHORTS: OnceLock<Vec<(&'static str, &'static str, u16, &'static str)>> = OnceLock::new();
+    SHORTS.get_or_init(|| {
+        DEVICES_TSV
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.starts_with("provider\t"))
+            .filter_map(|line| {
+                let c: Vec<&'static str> = line.split('\t').collect();
+                let short = c.get(11).copied()?;
+                let id = u16::from_str_radix(c.get(2)?, 16).ok()?;
+                (short != "-" && !short.is_empty()).then(|| (c[0], c[1], id, short))
+            })
+            .collect()
+    })
+}
+
+/// The short name (`G703`, `G915 X`, `DualSense`) of the device a key names, from the catalog's `short` column:
+/// `logitech-hidpp:40B5` (any row of that product id) and `game-controllers:054C:0CE6` (the vendor's pad with that
+/// product id; a trailing hash that tells two pads apart is ignored). `None` for a key the catalog does not know.
+pub fn short_name(key: &str) -> Option<&'static str> {
+    let (provider, rest) = key.split_once(':')?;
+    let mut parts = rest.split(':');
+    let first = u16::from_str_radix(parts.next()?, 16).ok()?;
+    let (matcher, id) = match provider {
+        "game-controllers" => {
+            let pid = u16::from_str_radix(parts.next()?, 16).ok()?;
+            let vendor = match first {
+                SONY_VID => "sony",
+                MICROSOFT_VID => "microsoft",
+                _ => return None,
+            };
+            (Some(vendor), pid)
+        }
+        _ => {
+            if parts.next().is_some() {
+                return None;
+            }
+            (None, first)
+        }
+    };
+    shorts()
+        .iter()
+        .find(|(p, m, i, _)| *p == provider && *i == id && matcher.is_none_or(|v| *m == v))
+        .map(|r| r.3)
+}
+
 /// The row for a product id of the given kind.
 pub fn find(matcher: Match, id: u16) -> Option<&'static Row> {
     rows().iter().find(|r| r.matcher == matcher && r.id == id)
@@ -239,6 +290,41 @@ mod tests {
             canonical_id(find(Match::Wpid, 0x4086).unwrap()),
             canonical_id(wpid)
         );
+    }
+
+    #[test]
+    fn short_names_come_from_the_catalog_by_key() {
+        assert_eq!(short_name("logitech-hidpp:4086"), Some("G703"));
+        assert_eq!(short_name("logitech-hidpp:40B5"), Some("G915 X"));
+        assert_eq!(short_name("logitech-hidpp:0AB5"), Some("G733"));
+        assert_eq!(short_name("logitech-hidpp:C356"), Some("G915 X"));
+        assert_eq!(short_name("game-controllers:054C:0CE6"), Some("DualSense"));
+        assert_eq!(
+            short_name("game-controllers:045E:0B12:0123456789abcdef"),
+            Some("Xbox Controller"),
+            "the hash of a second pad is ignored"
+        );
+        // A receiver is not a shown device; unknown ids, vendors and odd keys have no short name.
+        assert_eq!(short_name("logitech-hidpp:C539"), None);
+        assert_eq!(short_name("logitech-hidpp:FFFF"), None);
+        assert_eq!(short_name("game-controllers:1234:0CE6"), None);
+        assert_eq!(short_name("game-controllers:054C:FFFF"), None);
+        assert_eq!(short_name("demo-g703"), None);
+        assert_eq!(short_name("logitech-hidpp:40B5:extra"), None);
+        assert_eq!(short_name(""), None);
+    }
+
+    #[test]
+    fn every_shown_row_has_a_short_name_shorter_than_its_model() {
+        for line in DEVICES_TSV.lines().filter(|l| !l.starts_with('#')).skip(1) {
+            let c: Vec<&str> = line.split('\t').collect();
+            assert_eq!(c.len(), 12, "{line}");
+            if c[1] == "receiver" {
+                assert_eq!(c[11], "-");
+            } else {
+                assert!(!c[11].is_empty() && c[11] != "-" && c[11].len() <= c[3].len());
+            }
+        }
     }
 
     #[test]

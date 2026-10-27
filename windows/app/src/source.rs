@@ -206,6 +206,8 @@ struct Sample {
     percent: u8,
     anchors: &'static [(f32, f32)],
     usage: (&'static str, &'static str),
+    /// Hours of use on each of the last 7 days, oldest first; the last is today.
+    week: [f32; 7],
     health: Option<&'static str>,
 }
 
@@ -225,6 +227,7 @@ const G703: Sample = Sample {
         (0.0, 23.0),
     ],
     usage: ("4", "10"),
+    week: [3.2, 5.1, 4.6, 6.0, 1.4, 0.8, 4.2],
     health: Some("94"),
 };
 const G915: Sample = Sample {
@@ -243,6 +246,7 @@ const G915: Sample = Sample {
         (0.0, 46.0),
     ],
     usage: ("6", "05"),
+    week: [5.0, 6.4, 7.2, 6.8, 2.0, 1.2, 6.1],
     health: Some("98"),
 };
 const G733: Sample = Sample {
@@ -261,17 +265,19 @@ const G733: Sample = Sample {
         (-0.5, 71.0),
     ],
     usage: ("1", "30"),
+    week: [0.5, 1.8, 2.2, 1.0, 0.0, 0.0, 1.5],
     health: Some("89"),
 };
 const XBOX: Sample = Sample {
     key: "demo-xbox",
-    name: "Controle Xbox",
+    name: "Xbox Controller",
     kind: Kind::Gamepad,
     connection: id::CONN_BLUETOOTH,
     on: true,
     percent: 64,
     anchors: &[(-168.0, 30.0), (-140.0, 100.0), (-30.0, 75.0), (0.0, 64.0)],
     usage: ("1", "15"),
+    week: [0.0, 0.0, 2.5, 0.0, 3.1, 4.0, 1.3],
     health: None,
 };
 
@@ -303,6 +309,7 @@ fn view(s: &Sample, clock: &Clock, lang: Lang) -> DeviceView {
             id::USAGE_TODAY,
             &[&strings::fmt(lang, id::USAGE_HMIN, &[s.usage.0, s.usage.1])],
         ),
+        usage_week: s.week.map(|h| (h * 3600.0) as i64),
         health: strings::fmt(
             lang,
             id::HEALTH_LINE,
@@ -409,7 +416,7 @@ mod tests {
     fn the_scene_is_four_devices_three_on_in_the_cores_order() {
         let s = demo_snapshot(DemoPhase::Scene, &CLOCK, Lang::PtBr);
         let names: Vec<&str> = s.devices.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names, ["Controle Xbox", "G703", "G915 X", "G733"]);
+        assert_eq!(names, ["G703", "G915 X", "Xbox Controller", "G733"]);
         assert_eq!(s.on_count, 3);
         assert!(s.tooltip.encode_utf16().count() <= 127, "{}", s.tooltip);
         assert!(s.tooltip.contains("G703 23%"));

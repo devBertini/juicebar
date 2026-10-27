@@ -8,6 +8,7 @@ use crate::estimator::{
     self, DeviceHistory, Reading, clock_string, eta, eta_text, forecast_label, forecast_text,
     full_in_text, health_text, low_warning, round_half_up, smart_warning, usage_today_text,
 };
+use crate::hidpp::catalog;
 use crate::strings::{self, Lang, id};
 use crate::types::{Charging, Coarse, Connection, DeviceInfo, DeviceKey, Kind, Now, Quality};
 
@@ -107,6 +108,7 @@ pub struct Forecast {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeviceView {
     pub key: DeviceKey,
+    /// The short name from the catalog (`G703`), else the name the device reports.
     pub name: String,
     pub kind: Kind,
     /// "Receptor", "Dongle", "Bluetooth", "Cabo USB".
@@ -129,6 +131,8 @@ pub struct DeviceView {
     pub forecast: Option<Forecast>,
     /// "Hoje: 4 h 10 min de uso".
     pub usage_today: String,
+    /// Seconds of use on each of the last 7 local days, oldest first; the last one is today.
+    pub usage_week: [i64; 7],
     /// "Saúde da bateria: 92%" or "... aprendendo".
     pub health: String,
 }
@@ -301,7 +305,7 @@ fn device_view(d: &DeviceInput<'_>, now: i64, lang: Lang) -> (DeviceView, bool) 
 
     let view = DeviceView {
         key: d.info.key.clone(),
-        name: d.info.name.clone(),
+        name: display_name(d.info),
         kind: d.info.kind,
         connection: connection_text(d.info.connection, lang),
         on,
@@ -314,9 +318,29 @@ fn device_view(d: &DeviceInput<'_>, now: i64, lang: Lang) -> (DeviceView, bool) 
         chart: chart_points(d.readings, now),
         forecast,
         usage_today: usage_today_text(h, now, lang),
+        usage_week: usage_week(h, now),
         health: strings::fmt(lang, id::HEALTH_LINE, &[&health_text(h, lang)]),
     };
     (view, smart_active)
+}
+
+/// The name the panel, the tooltip and the notices show: the catalog's short name for the device's key, else the
+/// name the device reports.
+pub fn display_name(info: &DeviceInfo) -> String {
+    catalog::short_name(&info.key.0).map_or_else(|| info.name.clone(), str::to_string)
+}
+
+/// Seconds of use on each of the last 7 local days, oldest first; days with no online time are 0.
+pub fn usage_week(h: &DeviceHistory, now: i64) -> [i64; 7] {
+    let today = (now + h.utc_offset).div_euclid(estimator::DAY);
+    let by_day = estimator::usage_by_day(h, now);
+    std::array::from_fn(|i| {
+        let day = today - (6 - i as i64);
+        by_day
+            .iter()
+            .find(|&&(d, _)| d == day)
+            .map_or(0, |&(_, secs)| secs)
+    })
 }
 
 /// The measurable readings of the last 7 days, one point per hour (the last reading of the hour).
@@ -851,6 +875,7 @@ mod tests {
             chart: Vec::new(),
             forecast: None,
             usage_today: String::new(),
+            usage_week: [0; 7],
             health: String::new(),
         }
     }
@@ -906,5 +931,50 @@ mod tests {
         assert!(utf16_len(&t) <= TOOLTIP_LIMIT);
         assert!(t.ends_with('…'));
         assert!(t.chars().all(|c| c == '\u{1F3AE}' || c == '…'));
+    }
+
+    #[test]
+    fn the_panel_shows_the_catalogs_short_name() {
+        let mut i = info(
+            "G703 LIGHTSPEED Wireless Gaming Mouse",
+            "logitech-hidpp:4086",
+            Kind::Mouse,
+            Connection::Receiver,
+        );
+        assert_eq!(display_name(&i), "G703");
+        let h = history(Some(T0), &[(T0, 80.0, Charging::Discharging)]);
+        let s = Snapshot::build(
+            &[DeviceInput {
+                info: &i,
+                history: &h,
+                readings: &[],
+            }],
+            &now_at(T0 + 60),
+            "pt-BR",
+        );
+        assert_eq!(s.devices[0].name, "G703");
+        assert!(s.tooltip.starts_with("G703"), "{}", s.tooltip);
+        assert!(!s.tooltip.contains("Wireless"));
+        // A key the catalog does not know keeps the name the device reports.
+        i.key = DeviceKey("os-bluetooth:ab".into());
+        assert_eq!(display_name(&i), "G703 LIGHTSPEED Wireless Gaming Mouse");
+    }
+
+    #[test]
+    fn usage_week_has_seven_local_days_oldest_first() {
+        let h = history(Some(T0), &[(T0, 80.0, Charging::Discharging)]);
+        // Monday 09:00 to 12:00: three hours today, nothing before.
+        assert_eq!(usage_week(&h, T0 + 3 * 3600), [0, 0, 0, 0, 0, 0, 3 * 3600]);
+        // Tuesday 11:00: Monday from 09:00 to midnight (15 h) and Tuesday so far (11 h).
+        assert_eq!(
+            usage_week(&h, T0 + 26 * 3600),
+            [0, 0, 0, 0, 0, 15 * 3600, 11 * 3600]
+        );
+        // The view carries it.
+        let v = view_of("n", "n", &h, &[], T0 + 3 * 3600, "pt-BR");
+        assert_eq!(v.usage_week[6], 3 * 3600);
+        // A device that was never online has seven empty days.
+        let never = history(None, &[]);
+        assert_eq!(usage_week(&never, T0), [0; 7]);
     }
 }

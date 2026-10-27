@@ -114,7 +114,14 @@ ids! {
     STAT_OF_USE = "stat_of_use",
     STAT_HEALTH = "stat_health",
     RGB_SAVER_INFO = "rgb_saver_info",
-    LIGHTING_REAPPLIED = "lighting_reapplied"
+    LIGHTING_REAPPLIED = "lighting_reapplied",
+    CHART_USAGE_BY_DAY = "chart_usage_by_day",
+    WELCOME_TITLE = "welcome_title",
+    WELCOME_BODY = "welcome_body",
+    WELCOME_TRAY_TITLE = "welcome_tray_title",
+    WELCOME_TRAY_STEPS = "welcome_tray_steps",
+    WELCOME_CREDIT = "welcome_credit",
+    WELCOME_START = "welcome_start"
 }
 
 type Table = HashMap<&'static str, (&'static str, &'static str)>;
