@@ -269,6 +269,26 @@ pub fn paint_flyout(
         paint_row(c, state, &p, &f, row, opts.hover)?;
     }
 
+    if let Some(r) = layout.empty {
+        let mut lines = state.empty_text.lines();
+        let (title, hint) = (lines.next().unwrap_or(""), lines.next().unwrap_or(""));
+        let half = r.h / 2.0;
+        c.text_in(
+            title,
+            &f.stat,
+            Rect::new(r.x, r.y, r.w, half),
+            Align::Center,
+            p.fg2,
+        )?;
+        c.text_in(
+            hint,
+            &f.small,
+            Rect::new(r.x, r.y + half, r.w, half),
+            Align::Center,
+            p.fg3,
+        )?;
+    }
+
     if let Some(sep) = layout.separator {
         let t = c.text_layout(text::OFF_DEVICES, &f.small, sep.w, sep.h, Align::Left)?;
         c.draw_text_at(&t, sep.x, sep.y + (sep.h - t.h) / 2.0, p.fg3);

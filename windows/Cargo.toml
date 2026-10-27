@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["probe", "core", "hid", "ui"]
+members = ["probe", "core", "hid", "ui", "app"]
 
 [workspace.package]
 edition = "2024"

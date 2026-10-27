@@ -80,6 +80,9 @@ pub struct UiState {
     pub low_threshold: u8,
     /// The seven weekday labels under the chart, oldest first.
     pub day_labels: [String; 7],
+    /// Shown in place of the device list while there are no devices: the first line is the
+    /// title, a second line (after a line break) the hint. Unused when `devices` is not empty.
+    pub empty_text: String,
 }
 
 impl UiState {
@@ -198,6 +201,7 @@ impl UiState {
                 day("sáb"),
                 day("dom"),
             ],
+            empty_text: String::new(),
         }
     }
 }
