@@ -100,6 +100,12 @@ set_full	Full charge	Carga completa
 set_full_detail	Tell me when a device is charged	Avisar quando um dispositivo terminar de carregar
 set_dnd	Do not disturb	Não perturbe
 set_dnd_detail	No notifications; the icon still changes	Sem notificações; o ícone continua mudando
+sec_devices	Devices	Dispositivos
+set_dev_help	Switch: show in the panel. Pencil: rename. Arrows: change the order.	Chave: mostrar no painel. Lápis: renomear. Setas: mudar a ordem.
+set_dev_none	No device seen yet	Nenhum dispositivo visto ainda
+set_dev_hidden	hidden	oculto
+set_dev_rename	Name for {0}	Nome para {0}
+set_dev_rename_hint	Enter saves, Esc cancels. Empty goes back to {0}.	Enter salva, Esc cancela. Vazio volta para {0}.
 sec_general	General	Geral
 set_autostart	Start with Windows	Iniciar com o Windows
 set_language	Language	Idioma
@@ -108,6 +114,13 @@ lang_pt	Português	Português
 lang_en	English	English
 set_hotkey	Shortcut	Atalho
 set_hotkey_detail	Opens JuiceBar from anywhere	Abre o JuiceBar de qualquer lugar
+set_hotkey_now	Shortcut: {0}	Atalho: {0}
+set_change	Change	Alterar
+set_waiting	Waiting...	Aguardando...
+set_hotkey_capture	Hold two of Ctrl, Alt, Shift or Win and press a letter, digit or F key. Esc cancels.	Segure dois entre Ctrl, Alt, Shift ou Win e aperte uma letra, número ou tecla F. Esc cancela.
+set_hotkey_refused	Use at least two modifiers, like Ctrl+Alt	Use pelo menos dois modificadores, como Ctrl+Alt
+set_hotkey_in_use	That shortcut is already in use	Esse atalho já está em uso
+set_hotkey_reset	Restore default ({0})	Restaurar padrão ({0})
 sec_about	About	Sobre
 about_version	Version {0}	Versão {0}
 about_author	devBertini	devBertini

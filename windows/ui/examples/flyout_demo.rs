@@ -12,6 +12,9 @@
 //! picture, the window as the user sees it (capped to a 720 DIP work area) at the top and scrolled to the end, and
 //! the page with the keyboard focus on a stepper.
 //!
+//! `--render-w7c2 <folder>` writes the Dispositivos section with the Geral one under it (`w7c2-<scene>-<theme>-<scale>.png`):
+//! the devices, a row being renamed (the name selected, and with a typed name), and the shortcut waiting for keys.
+//!
 //! Without `--render` it shows the live flyout above the bottom-right corner of the primary screen
 //! until Esc, a click elsewhere, or `--seconds N`. `--capture <png>` also saves a screenshot of it
 //! (taken from the screen, so the real backdrop shows) 1.5 s after it opens.
@@ -117,6 +120,62 @@ fn render_w7c(dir: &Path) -> windows::core::Result<()> {
             for (name, state, max, scroll) in scenes {
                 let f = dir.join(format!("w7c-{name}-{tname}-{tag}.png"));
                 let (w, h) = render_flyout_png_at(state, theme, scale, &f, max, scroll)?;
+                println!("{} {w}x{h}", f.display());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The Dispositivos and Geral sections of the sample Settings page in four states.
+fn render_w7c2(dir: &Path) -> windows::core::Result<()> {
+    use juicebar_ui::settings::SettingsRow;
+    std::fs::create_dir_all(dir).expect("create the render folder");
+    for (theme, tname) in [(Theme::Light, "light"), (Theme::Dark, "dark")] {
+        for (scale, tag) in [(1.0f32, "100"), (1.5, "150")] {
+            let mut base = UiState::sample_settings(theme);
+            if let Some(ui) = base.settings.as_mut() {
+                ui.sections
+                    .retain(|s| s.title == "Dispositivos" || s.title == "Geral");
+            }
+            let edit = |value: &str, selected: bool| {
+                let mut st = base.clone();
+                let ui = st.settings.as_mut().unwrap();
+                let hint = "Enter salva, Esc cancela. Vazio volta para G915 X.";
+                let row = SettingsRow::text(18, "Nome para G915 X", value, true)
+                    .with_selected(selected)
+                    .with_detail(hint);
+                ui.sections[0].rows[1] = row;
+                st
+            };
+            let mut capture = base.clone();
+            if let Some(ui) = capture.settings.as_mut() {
+                ui.capturing = true;
+                ui.focus = Some(12);
+                ui.sections[1].rows[2] = SettingsRow::link(
+                    12,
+                    "Atalho: Ctrl+Alt+B",
+                    "Aguardando...",
+                )
+                .with_detail(
+                    "Segure Ctrl, Alt ou Win e aperte uma letra, número ou tecla F. Esc cancela.",
+                );
+            }
+            let mut focused = base.clone();
+            if let Some(ui) = focused.settings.as_mut() {
+                ui.focus = Some(18);
+            }
+            let scenes: [(&str, UiState); 6] = [
+                ("devices", base.clone()),
+                ("rename", edit("G915 X", true)),
+                ("typing", edit("Teclado da mesa", false)),
+                ("long", edit("WWWWWWWWWWWWWWWWWWWWWWWW", false)),
+                ("capture", capture),
+                ("focus", focused),
+            ];
+            for (name, state) in scenes {
+                let f = dir.join(format!("w7c2-{name}-{tname}-{tag}.png"));
+                let (w, h) = render_flyout_png_at(&state, theme, scale, &f, Some(100_000.0), 0.0)?;
                 println!("{} {w}x{h}", f.display());
             }
         }
@@ -266,6 +325,9 @@ fn main() -> windows::core::Result<()> {
     };
     if let Some(dir) = value("--render") {
         return render(Path::new(dir));
+    }
+    if let Some(dir) = value("--render-w7c2") {
+        return render_w7c2(Path::new(dir));
     }
     if let Some(dir) = value("--render-w7c") {
         return render_w7c(Path::new(dir));

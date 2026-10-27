@@ -66,6 +66,92 @@ impl Default for Limits {
     }
 }
 
+/// The longest name the user can give a device, in characters.
+pub const NAME_MAX: usize = 24;
+
+/// The user's names and order for the devices (the Settings page). A device without an entry keeps the catalog's
+/// short name and goes after the ordered ones, devices that are on first.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Arrangement {
+    /// The name the user gave a device, by key.
+    pub names: Vec<(DeviceKey, String)>,
+    /// The devices the user ordered, first to last.
+    pub order: Vec<DeviceKey>,
+}
+
+impl Arrangement {
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty() && self.order.is_empty()
+    }
+
+    /// The name the user gave the device, if any.
+    pub fn name_of(&self, key: &DeviceKey) -> Option<&str> {
+        self.names
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, n)| n.as_str())
+    }
+
+    /// Gives a device a name, or takes the name away when `name` is empty. The name is cleaned first (`clean_name`).
+    pub fn set_name(&mut self, key: &DeviceKey, name: &str) {
+        let name = clean_name(name);
+        self.names.retain(|(k, _)| k != key);
+        if !name.is_empty() {
+            self.names.push((key.clone(), name));
+        }
+    }
+
+    /// Where the user put the device; `None` when it was never ordered.
+    pub fn rank(&self, key: &DeviceKey) -> Option<usize> {
+        self.order.iter().position(|k| k == key)
+    }
+
+    /// The sort key of a device named `name` (the name shown): the ordered ones by their place, then the rest with
+    /// the devices that are on first and by name.
+    pub fn sort_key(
+        &self,
+        key: &DeviceKey,
+        on: bool,
+        name: &str,
+    ) -> (usize, bool, String, DeviceKey) {
+        (
+            self.rank(key).unwrap_or(usize::MAX),
+            !on,
+            name.to_lowercase(),
+            key.clone(),
+        )
+    }
+
+    /// Moves a device one place up (`delta < 0`) or down in the list `current`, which is the list as shown now
+    /// (every device, in the order the user sees it). The whole list becomes the user's order, so the move sticks
+    /// even for devices that were never ordered. Returns false when the device is not in the list or already at
+    /// that end.
+    pub fn move_in(&mut self, current: &[DeviceKey], key: &DeviceKey, delta: i32) -> bool {
+        let Some(at) = current.iter().position(|k| k == key) else {
+            return false;
+        };
+        let to = at as i64 + i64::from(delta.signum());
+        if to < 0 || to >= current.len() as i64 {
+            return false;
+        }
+        let mut order: Vec<DeviceKey> = current.to_vec();
+        order.swap(at, to as usize);
+        self.order = order;
+        true
+    }
+}
+
+/// A device name as stored: trimmed, no control characters, at most `NAME_MAX` characters.
+pub fn clean_name(raw: &str) -> String {
+    let kept: String = raw.chars().filter(|c| !c.is_control()).collect();
+    kept.trim()
+        .chars()
+        .take(NAME_MAX)
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
 impl IconLook {
     /// The look of the shown `devices`. `smart_alert` says that a smart warning is active on an online device.
     /// Offline devices and devices without a reading count for nothing but the charging flag (which needs an
@@ -197,6 +283,25 @@ impl Snapshot {
     }
 }
 
+impl Snapshot {
+    /// The snapshot with the user's names and order applied: the panel, the tooltip and the notices built from it
+    /// follow. The icon does not depend on either.
+    pub fn arranged(mut self, a: &Arrangement, lang: Lang) -> Snapshot {
+        if a.is_empty() {
+            return self;
+        }
+        for d in &mut self.devices {
+            if let Some(name) = a.name_of(&d.key) {
+                d.name = name.to_string();
+            }
+        }
+        self.devices
+            .sort_by_cached_key(|d| a.sort_key(&d.key, d.on, &d.name));
+        self.tooltip = tooltip(&self.devices, lang);
+        self
+    }
+}
+
 fn coarse_text(c: Coarse, lang: Lang) -> &'static str {
     strings::get(
         lang,
@@ -209,7 +314,8 @@ fn coarse_text(c: Coarse, lang: Lang) -> &'static str {
     )
 }
 
-fn connection_text(c: Connection, lang: Lang) -> String {
+/// "Receptor", "Dongle", "Bluetooth", "Cabo USB".
+pub fn connection_text(c: Connection, lang: Lang) -> String {
     strings::get(
         lang,
         match c {
@@ -1055,5 +1161,102 @@ mod tests {
         // A device that was never online has seven empty days.
         let never = history(None, &[]);
         assert_eq!(usage_week(&never, T0), [0; 7]);
+    }
+
+    fn snapshot_of(devices: Vec<DeviceView>) -> Snapshot {
+        Snapshot {
+            icon: IconLook::of(&devices, false, Limits::default()),
+            tooltip: tooltip(&devices, Lang::PtBr),
+            on_count: devices.iter().filter(|d| d.on).count(),
+            devices,
+        }
+    }
+
+    fn key(n: &str) -> DeviceKey {
+        DeviceKey(n.to_string())
+    }
+
+    fn names_of(s: &Snapshot) -> Vec<&str> {
+        s.devices.iter().map(|d| d.name.as_str()).collect()
+    }
+
+    #[test]
+    fn no_arrangement_leaves_the_snapshot_as_it_is() {
+        let s = snapshot_of(vec![
+            view("G915 X", true, Some(40), "a"),
+            view("G703", false, Some(76), "b"),
+        ]);
+        assert_eq!(s.clone().arranged(&Arrangement::default(), Lang::PtBr), s);
+    }
+
+    #[test]
+    fn a_name_the_user_gave_reaches_the_panel_and_the_tooltip() {
+        let s = snapshot_of(vec![
+            view("G703", true, Some(76), "~16 h de uso"),
+            view("G915 X", true, Some(40), "a"),
+        ]);
+        let mut a = Arrangement::default();
+        a.set_name(&key("G703"), "  Mouse da mesa ");
+        let s = s.arranged(&a, Lang::PtBr);
+        assert_eq!(
+            names_of(&s),
+            ["G915 X", "Mouse da mesa"],
+            "ordered by the shown name"
+        );
+        assert!(s.tooltip.contains("Mouse da mesa 76%"), "{}", s.tooltip);
+        assert!(!s.tooltip.contains("G703"));
+        // An empty name takes the user's name away.
+        a.set_name(&key("G703"), "   ");
+        assert_eq!(a.name_of(&key("G703")), None);
+    }
+
+    #[test]
+    fn names_are_cleaned_and_cut_to_the_limit() {
+        assert_eq!(clean_name("  abc\t\n "), "abc");
+        assert_eq!(clean_name(&"x".repeat(40)).chars().count(), NAME_MAX);
+        assert_eq!(clean_name(&format!("{} y", "a".repeat(23))), "a".repeat(23));
+        assert_eq!(clean_name("\u{7}\r"), "");
+        let accented = "é".repeat(30);
+        assert_eq!(
+            clean_name(&accented).chars().count(),
+            NAME_MAX,
+            "characters, not bytes"
+        );
+    }
+
+    #[test]
+    fn the_ordered_devices_come_first_then_the_rest_with_those_on_first() {
+        let s = snapshot_of(vec![
+            view("A", false, Some(10), "a"),
+            view("B", true, Some(20), "b"),
+            view("C", true, Some(30), "c"),
+            view("D", false, Some(40), "d"),
+        ]);
+        let a = Arrangement {
+            names: Vec::new(),
+            order: vec![key("D"), key("B")],
+        };
+        let s = s.arranged(&a, Lang::PtBr);
+        assert_eq!(names_of(&s), ["D", "B", "C", "A"]);
+        assert!(s.tooltip.starts_with('D'), "{}", s.tooltip);
+        assert_eq!(s.on_count, 2, "the order does not change what is on");
+    }
+
+    #[test]
+    fn moving_a_device_swaps_it_with_its_neighbour_and_keeps_the_whole_list() {
+        let list = [key("A"), key("B"), key("C")];
+        let mut a = Arrangement::default();
+        assert!(a.move_in(&list, &key("C"), -1));
+        assert_eq!(a.order, [key("A"), key("C"), key("B")]);
+        assert!(a.move_in(&[key("A"), key("C"), key("B")], &key("A"), 1));
+        assert_eq!(a.order, [key("C"), key("A"), key("B")]);
+        // The ends and a stranger do not move.
+        let mut b = Arrangement::default();
+        assert!(!b.move_in(&list, &key("A"), -1));
+        assert!(!b.move_in(&list, &key("C"), 1));
+        assert!(!b.move_in(&list, &key("Z"), 1));
+        assert!(b.order.is_empty());
+        assert_eq!(a.rank(&key("A")), Some(1));
+        assert_eq!(a.rank(&key("Z")), None);
     }
 }

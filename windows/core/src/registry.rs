@@ -113,16 +113,19 @@ impl Registry {
         }
     }
 
-    /// Register or remove a device by the user's choice. Removing keeps it from registering itself again.
+    /// Register or remove a device by the user's choice. Removing keeps it from registering itself again, also for
+    /// a device that has not appeared yet.
     pub fn set_registered(&mut self, key: &DeviceKey, registered: bool) -> Vec<Change> {
-        let Some(entry) = self.entries.iter_mut().find(|e| &e.info.key == key) else {
-            return Vec::new();
-        };
+        // The user's list is kept for a device not seen yet too: one hidden in an earlier run can be shown again, and
+        // one shown again must not hide itself when it appears.
         if registered {
             self.removed.retain(|k| k != key);
         } else if !self.removed.contains(key) {
             self.removed.push(key.clone());
         }
+        let Some(entry) = self.entries.iter_mut().find(|e| &e.info.key == key) else {
+            return Vec::new();
+        };
         if entry.registered == registered {
             return Vec::new();
         }
@@ -288,6 +291,23 @@ mod tests {
             next.set_registered(&DeviceKey("nope".into()), true)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_device_not_seen_yet_can_be_hidden_and_shown_by_the_user_list() {
+        let key = logitech_key(Match::Wpid, 0x4086);
+        let mut r = Registry::new();
+        // Hidden before it ever appears: no change to report, but the list keeps it, so it appears hidden.
+        assert!(r.set_registered(&key, false).is_empty());
+        assert_eq!(r.user_list().removed, vec![key.clone()]);
+        r.apply(&ProviderEvent::Appeared(info(&key, Connection::Receiver)));
+        assert!(!r.get(&key).unwrap().registered);
+        // Shown again before it appears (a later run): it appears shown.
+        let mut next = Registry::with_user_list(&r.user_list());
+        assert!(next.set_registered(&key, true).is_empty());
+        assert!(next.user_list().removed.is_empty());
+        next.apply(&ProviderEvent::Appeared(info(&key, Connection::Receiver)));
+        assert!(next.get(&key).unwrap().registered);
     }
 
     #[test]

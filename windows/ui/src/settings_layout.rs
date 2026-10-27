@@ -8,7 +8,10 @@
 //! `settings_draw::measure_settings`; with none, the defaults below stand in (one line of text).
 
 use crate::layout::{Rect, WIDTH};
-use crate::settings::{PART_MINUS, PART_PLUS, PART_ROW, PART_SEGMENT, RowId, RowKind, UiSettings};
+use crate::settings::{
+    PART_DOWN, PART_MINUS, PART_PLUS, PART_RENAME, PART_ROW, PART_SEGMENT, PART_SHOW, PART_UP,
+    RowId, RowKind, UiSettings,
+};
 
 pub const PAD_X: f32 = 14.0;
 pub const CARD_W: f32 = WIDTH - 2.0 * PAD_X;
@@ -33,9 +36,19 @@ pub const STEPPER_W: f32 = 2.0 * BUTTON + STEPPER_VALUE_W + 2.0 * STEPPER_GAP;
 pub const SEGMENT_PAD: f32 = 2.0;
 pub const SEGMENT_MIN_W: f32 = 56.0;
 pub const SEGMENT_TEXT_PAD: f32 = 22.0;
-pub const TEXT_FIELD_W: f32 = 150.0;
+pub const TEXT_FIELD_W: f32 = 168.0;
 pub const VALUE_H: f32 = 24.0;
 pub const ARROW: f32 = 12.0;
+/// A device row: the glyph's square, the gap after it, and the small buttons at the right end.
+pub const DEVICE_GLYPH: f32 = 22.0;
+pub const DEVICE_GLYPH_GAP: f32 = 10.0;
+pub const DEVICE_BUTTON: f32 = 26.0;
+pub const DEVICE_GAP: f32 = 4.0;
+/// The gap between the last button and the switch.
+pub const DEVICE_SWITCH_GAP: f32 = 8.0;
+/// Pencil, up and down, then the switch.
+pub const DEVICE_CONTROL_W: f32 =
+    3.0 * DEVICE_BUTTON + 2.0 * DEVICE_GAP + DEVICE_SWITCH_GAP + TOGGLE_W;
 const IDENTITY_H: f32 = 156.0;
 /// The scroll step of one notch of the mouse wheel.
 pub const WHEEL_STEP: f32 = 48.0;
@@ -69,6 +82,19 @@ pub fn label_width(control_w: f32) -> f32 {
     CARD_W - 2.0 * ROW_PAD_X - gap
 }
 
+/// How far a row's label is pushed right (a device row keeps its glyph there).
+pub fn label_inset(kind: &RowKind) -> f32 {
+    match kind {
+        RowKind::Device { .. } => DEVICE_GLYPH + DEVICE_GLYPH_GAP,
+        _ => 0.0,
+    }
+}
+
+/// The width the label of a row of `kind` with a control `control_w` wide wraps at.
+pub fn label_width_of(kind: &RowKind, control_w: f32) -> f32 {
+    label_width(control_w) - label_inset(kind)
+}
+
 /// The control's width and its segments' widths, given a function that measures a text in the
 /// control font.
 pub fn control_size(kind: &RowKind, text_w: &dyn Fn(&str) -> f32) -> (f32, Vec<f32>) {
@@ -92,6 +118,7 @@ pub fn control_size(kind: &RowKind, text_w: &dyn Fn(&str) -> f32) -> (f32, Vec<f
         }
         RowKind::Value { text } => ((text_w(text).ceil() + 20.0).max(40.0), Vec::new()),
         RowKind::Text { .. } => (TEXT_FIELD_W, Vec::new()),
+        RowKind::Device { .. } => (DEVICE_CONTROL_W, Vec::new()),
         RowKind::Identity { .. } | RowKind::Note => (0.0, Vec::new()),
     }
 }
@@ -322,15 +349,17 @@ fn place_row(
     let bounds = Rect::new(x, y, CARD_W, h);
     let x0 = x + ROW_PAD_X;
     let x1 = bounds.right() - ROW_PAD_X;
-    let lw = label_width(m.control_w);
+    let lw = label_width_of(&r.kind, m.control_w);
+    let lx = x0 + label_inset(&r.kind);
     let top = y + (h - text_h) / 2.0;
-    let label = Rect::new(x0, top, lw, m.label_h);
-    let detail = has_detail.then(|| Rect::new(x0, top + m.label_h + 2.0, lw, m.detail_h));
+    let label = Rect::new(lx, top, lw, m.label_h);
+    let detail = has_detail.then(|| Rect::new(lx, top + m.label_h + 2.0, lw, m.detail_h));
     let cy = y + h / 2.0;
     let ch = match r.kind {
         RowKind::Toggle { .. } => TOGGLE_H,
         RowKind::Value { .. } => VALUE_H,
         RowKind::Link { .. } => ARROW + 8.0,
+        RowKind::Device { .. } => DEVICE_BUTTON,
         _ => BUTTON,
     };
     let control = if m.control_w > 0.0 {
@@ -360,6 +389,23 @@ fn place_row(
                     hits.push((tall(plus), PART_PLUS));
                 }
             }
+            RowKind::Device {
+                can_up, can_down, ..
+            } => {
+                let (show, rename, up, down) = device_buttons(control);
+                // The hit zones are as tall as the row; the pencil and the arrows answer where they are drawn.
+                let tall = |b: Rect| Rect::new(b.x - 1.0, y, b.w + 2.0, h);
+                hits.push((tall(show), PART_SHOW));
+                hits.push((tall(rename), PART_RENAME));
+                if *can_up {
+                    hits.push((tall(up), PART_UP));
+                }
+                if *can_down {
+                    hits.push((tall(down), PART_DOWN));
+                }
+                minus = up;
+                plus = down;
+            }
             RowKind::Choice { .. } => {
                 let mut sx = control.x + SEGMENT_PAD;
                 for (k, w) in m.seg_w.iter().enumerate() {
@@ -379,6 +425,10 @@ fn place_row(
             }
             _ => {}
         }
+    } else if let RowKind::Device { .. } = r.kind {
+        let (_, _, up, down) = device_buttons(control);
+        minus = up;
+        plus = down;
     } else if let RowKind::Stepper { .. } = r.kind {
         minus = Rect::new(control.x, control.y, BUTTON, BUTTON);
         plus = Rect::new(control.right() - BUTTON, control.y, BUTTON, BUTTON);
@@ -440,6 +490,33 @@ impl SettingsGeom {
     }
 }
 
+/// The parts of a device row's control, left to right: the pencil, the up arrow, the down arrow and the switch
+/// (returned as switch, pencil, up, down).
+pub fn device_buttons(control: Rect) -> (Rect, Rect, Rect, Rect) {
+    let cy = control.cy();
+    let button = |x: f32| Rect::new(x, cy - DEVICE_BUTTON / 2.0, DEVICE_BUTTON, DEVICE_BUTTON);
+    let rename = button(control.x);
+    let up = button(rename.right() + DEVICE_GAP);
+    let down = button(up.right() + DEVICE_GAP);
+    let show = Rect::new(
+        control.right() - TOGGLE_W,
+        cy - TOGGLE_H / 2.0,
+        TOGGLE_W,
+        TOGGLE_H,
+    );
+    (show, rename, up, down)
+}
+
+/// The glyph's square inside a device row.
+pub fn device_glyph(bounds: Rect) -> Rect {
+    Rect::new(
+        bounds.x + ROW_PAD_X,
+        bounds.cy() - DEVICE_GLYPH / 2.0,
+        DEVICE_GLYPH,
+        DEVICE_GLYPH,
+    )
+}
+
 /// What a point on the Settings page lands on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsHit {
@@ -451,6 +528,7 @@ pub enum SettingsHit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Glyph;
     use crate::settings::{SettingsRow, SettingsSection};
 
     fn page() -> UiSettings {
@@ -721,5 +799,93 @@ mod tests {
         };
         let (cw, _) = control_size(&c, &w);
         assert!(label_width(cw) > 60.0, "{}", label_width(cw));
+    }
+
+    fn device_ui() -> UiSettings {
+        UiSettings::new(
+            "Configurações",
+            vec![SettingsSection::new(
+                "Dispositivos",
+                vec![
+                    SettingsRow::device(10, "G703", Glyph::Mouse, true, (false, true))
+                        .with_detail("Receptor"),
+                    SettingsRow::device(11, "G915 X", Glyph::Keyboard, false, (true, true)),
+                    SettingsRow::device(12, "Xbox Controller", Glyph::Gamepad, true, (true, false)),
+                    SettingsRow::note(13, "ajuda"),
+                ],
+            )],
+        )
+    }
+
+    #[test]
+    fn a_device_row_keeps_its_glyph_its_label_and_its_four_controls_apart_inside_the_card() {
+        let g = compute(&device_ui(), &SettingsMetrics::default(), 10_000.0);
+        let r = g.row(10).unwrap();
+        let glyph = device_glyph(r.bounds);
+        let (show, rename, up, down) = device_buttons(r.control);
+        assert!(glyph.x >= r.bounds.x && glyph.bottom() <= r.bounds.bottom());
+        assert!(glyph.right() < r.label.x, "the label clears the glyph");
+        assert!(r.label.right() < rename.x, "the label clears the buttons");
+        assert!(rename.right() <= up.x && up.right() <= down.x && down.right() <= show.x);
+        assert!(show.right() <= r.bounds.right() - ROW_PAD_X + 0.01);
+        for b in [show, rename, up, down] {
+            assert!(b.y >= r.bounds.y && b.bottom() <= r.bounds.bottom());
+        }
+        assert_eq!(r.control.w, DEVICE_CONTROL_W);
+        assert!((label_inset(&RowKind::Toggle { on: true })).abs() < 0.01);
+        assert!(
+            (label_width_of(&device_ui().row(10).unwrap().kind, DEVICE_CONTROL_W)
+                - (label_width(DEVICE_CONTROL_W) - DEVICE_GLYPH - DEVICE_GLYPH_GAP))
+                .abs()
+                < 0.01
+        );
+    }
+
+    #[test]
+    fn each_device_control_answers_for_its_own_part_and_a_blocked_arrow_for_none() {
+        let g = compute(&device_ui(), &SettingsMetrics::default(), 10_000.0);
+        let at = |id: u16, f: &dyn Fn((Rect, Rect, Rect, Rect)) -> Rect| {
+            let r = g.row(id).unwrap();
+            let b = f(device_buttons(r.control));
+            g.hit(b.x + b.w / 2.0, b.cy(), 0.0)
+        };
+        assert_eq!(at(11, &|b| b.0), SettingsHit::Row(11, PART_SHOW));
+        assert_eq!(at(11, &|b| b.1), SettingsHit::Row(11, PART_RENAME));
+        assert_eq!(at(11, &|b| b.2), SettingsHit::Row(11, PART_UP));
+        assert_eq!(at(11, &|b| b.3), SettingsHit::Row(11, PART_DOWN));
+        // The first device cannot go up, the last cannot go down.
+        assert_eq!(at(10, &|b| b.2), SettingsHit::None);
+        assert_eq!(at(10, &|b| b.3), SettingsHit::Row(10, PART_DOWN));
+        assert_eq!(at(12, &|b| b.3), SettingsHit::None);
+        assert_eq!(at(12, &|b| b.2), SettingsHit::Row(12, PART_UP));
+        // The name and the glyph are not buttons.
+        let r = g.row(11).unwrap();
+        assert_eq!(
+            g.hit(r.label.x + 4.0, r.label.y + 2.0, 0.0),
+            SettingsHit::None
+        );
+        let glyph = device_glyph(r.bounds);
+        assert_eq!(g.hit(glyph.x + 3.0, glyph.cy(), 0.0), SettingsHit::None);
+    }
+
+    #[test]
+    fn a_device_row_with_a_second_line_is_taller_than_one_without() {
+        let g = compute(&device_ui(), &SettingsMetrics::default(), 10_000.0);
+        assert!(g.row(10).unwrap().bounds.h > g.row(11).unwrap().bounds.h);
+        assert!(g.row(11).unwrap().bounds.h >= ROW_MIN);
+    }
+
+    #[test]
+    fn the_widest_device_control_still_leaves_a_name_room() {
+        // The longest catalog name ("Xbox Controller") at about 7 DIPs a letter beside the controls and the glyph.
+        let w = |s: &str| s.chars().count() as f32 * 7.0;
+        let kind = RowKind::Device {
+            glyph: Glyph::Gamepad,
+            shown: true,
+            can_up: true,
+            can_down: true,
+        };
+        let (cw, _) = control_size(&kind, &w);
+        assert!(label_width_of(&kind, cw) > w("Xbox Controller"));
     }
 }

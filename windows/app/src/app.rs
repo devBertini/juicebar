@@ -16,7 +16,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::ProcessStatus::K32EmptyWorkingSet;
 use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
+    HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
 };
 use windows::Win32::UI::Shell::{NIN_SELECT, ShellExecuteW};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -29,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
-use juicebar_core::snapshot::{Limits, Snapshot};
+use juicebar_core::snapshot::Snapshot;
 use juicebar_core::strings::Lang;
 use juicebar_core::types::{Action, DeviceKey};
 use juicebar_hid::Transport;
@@ -37,19 +37,21 @@ use juicebar_ui::flyout::{Flyout, Handlers};
 use juicebar_ui::icon::IconLook;
 use juicebar_ui::layout::{FlyoutHit, PxRect};
 use juicebar_ui::model::UiState;
-use juicebar_ui::settings::{EditKey, UiSettings};
+use juicebar_ui::settings::{Chord, EditKey, RowId, UiSettings};
 use juicebar_ui::system;
 
 use crate::anim::{self, Anim, TrayHost};
 use crate::args::Args;
 use crate::controllers::Controllers;
+use crate::devices::{self, Edited, Rename};
 use crate::files::DataDir;
-use crate::live::{LightChange, Live, Prefs, StartConfig};
+use crate::hotkey::{self, Hotkey, Registrar};
+use crate::live::{DeviceChoice, LightChange, Live, Prefs, StartConfig};
 use crate::menu::{self, Command};
 use crate::notify::{Notice, Tracker};
 use crate::runkey;
 use crate::settings::{LangChoice, Settings};
-use crate::settings_page::{self, Change, PageInput};
+use crate::settings_page::{self, Change, DeviceOp, HotkeyState, PageInput, row};
 use crate::single::{self, WINDOW_CLASS};
 use crate::source::{Clock, DemoPhase, Source};
 use crate::tray::{self, IconKey, Tray};
@@ -66,7 +68,6 @@ const WM_FLYOUT_HIT: u32 = WM_APP + 2;
 const WM_FLYOUT_CLOSED: u32 = WM_APP + 3;
 
 const HOTKEY_ID: i32 = 1;
-const HOTKEY_TEXT: &str = "Ctrl+Alt+B";
 /// The one-shot timer the source asks for (`wake_at`, and the live source's `Wake`).
 const TIMER_WAKE: usize = 1;
 /// `--seconds N`: quit by itself (tests and captures only).
@@ -134,6 +135,7 @@ pub fn encode_hit(hit: FlyoutHit) -> usize {
             EditKey::Escape => EDIT_BASE + 2,
             EditKey::Char(c) => EDIT_CHAR_BASE + c as usize,
         },
+        FlyoutHit::Chord(c) => CHORD_BASE + ((usize::from(c.mods) << 16) | usize::from(c.vk)),
     }
 }
 
@@ -142,6 +144,8 @@ const SETTING_BASE: usize = 1 << 32;
 /// Keys typed into a text field: `EDIT_BASE` + 0 Backspace, 1 Enter, 2 Escape, and `EDIT_CHAR_BASE + code point`.
 const EDIT_BASE: usize = 1 << 33;
 const EDIT_CHAR_BASE: usize = 1 << 34;
+/// A key combination: `CHORD_BASE + (modifiers << 16 | virtual key)`.
+const CHORD_BASE: usize = 1 << 35;
 
 pub fn decode_hit(v: usize) -> FlyoutHit {
     match v {
@@ -151,6 +155,10 @@ pub fn decode_hit(v: usize) -> FlyoutHit {
         x if x == usize::MAX - 3 => FlyoutHit::Info,
         x if x == usize::MAX - 4 => FlyoutHit::Start,
         x if x == usize::MAX - 5 => FlyoutHit::Back,
+        x if x >= CHORD_BASE => FlyoutHit::Chord(Chord {
+            vk: ((x - CHORD_BASE) & 0xffff) as u16,
+            mods: (((x - CHORD_BASE) >> 16) & 0xff) as u8,
+        }),
         x if x >= EDIT_CHAR_BASE => char::from_u32((x - EDIT_CHAR_BASE) as u32)
             .map_or(FlyoutHit::None, |c| FlyoutHit::Edit(EditKey::Char(c))),
         x if x >= EDIT_BASE => match x - EDIT_BASE {
@@ -195,6 +203,40 @@ pub fn detect_lang(forced: Option<&str>) -> Lang {
     lang_from_langid(unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() })
 }
 
+/// The shortcut's registration with the system, on the shell's window. A test instance (`--no-hotkey`) registers
+/// nothing and takes every shortcut as free, so it never fights the owner's own JuiceBar.
+struct HotkeyReg {
+    hwnd: HWND,
+    live: bool,
+}
+
+impl Registrar for HotkeyReg {
+    fn register(&mut self, hotkey: Hotkey) -> bool {
+        if !self.live {
+            return true;
+        }
+        // SAFETY: registering a hot key for our own window; failure (taken by another app) is the answer.
+        unsafe {
+            RegisterHotKey(
+                Some(self.hwnd),
+                HOTKEY_ID,
+                HOT_KEY_MODIFIERS(u32::from(hotkey.mods)) | MOD_NOREPEAT,
+                u32::from(hotkey.vk),
+            )
+        }
+        .is_ok()
+    }
+
+    fn unregister(&mut self) {
+        if self.live {
+            // SAFETY: our own hot key; it fails harmlessly when not registered.
+            unsafe {
+                let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_ID);
+            }
+        }
+    }
+}
+
 pub struct App {
     hwnd: Cell<HWND>,
     args: Args,
@@ -237,6 +279,13 @@ pub struct App {
     /// The limit that the last change of the other one moved (its row says so until the next change).
     adjusted: Cell<Option<crate::settings::Adjusted>>,
     hotkey_ok: Cell<bool>,
+    /// The shortcut's row: idle, waiting for a key combination, or told that the last one is taken.
+    hotkey_state: Cell<HotkeyState>,
+    /// The device being renamed on the Settings page, if any.
+    rename: RefCell<Option<Rename>>,
+    /// The device behind each device row's id (`row::DEVICE_BASE` + index), kept for the whole run so a click always
+    /// reaches the device it was drawn for.
+    device_slots: RefCell<Vec<DeviceKey>>,
 }
 
 impl App {
@@ -262,7 +311,7 @@ impl App {
             .map(|d| Settings::parse(&d.read_settings()))
             .unwrap_or_default();
         let lang = settings.language.resolve(detect_lang(args.lang.as_deref()));
-        let snapshot = source.snapshot(&Clock::now(), lang, settings.limits());
+        let snapshot = source.snapshot(&Clock::now(), lang, &settings);
         let mut tracker = Tracker::default();
         tracker.set_alerts(settings.smart_warning, settings.full_notice);
         let mut anim = Anim::new(args.anim_every.map(|s| Duration::from_secs(u64::from(s))));
@@ -304,6 +353,9 @@ impl App {
             page_open: Cell::new(false),
             adjusted: Cell::new(None),
             hotkey_ok: Cell::new(false),
+            hotkey_state: Cell::new(HotkeyState::Idle),
+            rename: RefCell::new(None),
+            device_slots: RefCell::new(Vec::new()),
             args,
         }
     }
@@ -325,17 +377,7 @@ impl App {
     fn init(&self) {
         let hwnd = self.hwnd.get();
         self.tray.borrow_mut().bind(hwnd);
-        // SAFETY: registering a hot key for our own window; failure (taken by another app) is handled.
-        let ok = !self.args.no_hotkey
-            && unsafe {
-                RegisterHotKey(
-                    Some(hwnd),
-                    HOTKEY_ID,
-                    MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-                    u32::from(b'B'),
-                )
-            }
-            .is_ok();
+        let ok = !self.args.no_hotkey && self.registrar().register(self.settings.borrow().hotkey);
         self.hotkey_ok.set(ok);
         self.trace(&format!(
             "hotkey {}",
@@ -359,6 +401,13 @@ impl App {
             unsafe {
                 SetTimer(Some(hwnd), TIMER_QUIT, s.saturating_mul(1000), None);
             }
+        }
+    }
+
+    fn registrar(&self) -> HotkeyReg {
+        HotkeyReg {
+            hwnd: self.hwnd.get(),
+            live: !self.args.no_hotkey,
         }
     }
 
@@ -427,6 +476,7 @@ impl App {
                 prefs: Self::prefs_of(&settings),
                 rgb_economy: settings.rgb_economy,
                 hidden: settings.hidden.clone(),
+                arrangement: settings.arrangement.clone(),
                 lights: settings.lights.clone(),
             }
         };
@@ -674,26 +724,56 @@ impl App {
         }
     }
 
-    fn limits(&self) -> Limits {
-        self.settings.borrow().limits()
-    }
-
     /// The source's snapshot now, with the user's limits and language.
     fn fresh_snapshot(&self) -> Snapshot {
         self.source
             .borrow()
-            .snapshot(&Clock::now(), self.lang.get(), self.limits())
+            .snapshot(&Clock::now(), self.lang.get(), &self.settings.borrow())
+    }
+
+    /// The Dispositivos rows: every known device with the id of its row.
+    fn device_rows(&self) -> Vec<(RowId, DeviceChoice)> {
+        let list =
+            self.source
+                .borrow()
+                .devices(&Clock::now(), self.lang.get(), &self.settings.borrow());
+        let mut slots = self.device_slots.borrow_mut();
+        list.into_iter()
+            .filter_map(|d| {
+                let at = match slots.iter().position(|k| *k == d.key) {
+                    Some(at) => at,
+                    None => {
+                        slots.push(d.key.clone());
+                        slots.len() - 1
+                    }
+                };
+                let id = row::DEVICE_BASE.checked_add(u16::try_from(at).ok()?)?;
+                Some((id, d))
+            })
+            .collect()
+    }
+
+    /// The device a device row stands for.
+    fn device_of(&self, id: RowId) -> Option<DeviceKey> {
+        let at = usize::from(id.checked_sub(row::DEVICE_BASE)?);
+        self.device_slots.borrow().get(at).cloned()
     }
 
     /// The Settings page for the user's settings.
     fn settings_page(&self) -> UiSettings {
+        let devices = self.device_rows();
+        let settings = self.settings.borrow();
+        let rename = self.rename.borrow();
         settings_page::build(&PageInput {
-            settings: &self.settings.borrow(),
+            settings: &settings,
             lang: self.lang.get(),
             autostart: runkey::is_enabled(runkey::VALUE),
             transparency: system::transparency_enabled(),
-            hotkey: HOTKEY_TEXT,
+            hotkey: settings.hotkey,
             hotkey_ok: self.hotkey_ok.get() || self.args.no_hotkey,
+            hotkey_state: self.hotkey_state.get(),
+            devices: &devices,
+            rename: rename.as_ref(),
             adjusted: self.adjusted.get(),
         })
     }
@@ -715,6 +795,7 @@ impl App {
                 .live()
                 .is_some_and(|live| live.lighting_conflict());
         let ghub_notice = conflict.then(|| view::ghub_notice(lang));
+        let hotkey_text = self.settings.borrow().hotkey.text();
         view::ui_state(&ViewInput {
             snapshot: &snap,
             theme,
@@ -722,7 +803,7 @@ impl App {
             lang,
             rgb_economy: self.rgb_economy.get(),
             info_open: self.info_open.get(),
-            hotkey_text: HOTKEY_TEXT,
+            hotkey_text: &hotkey_text,
             ghub_notice,
             welcome: self.welcome.get(),
             settings: self.page_open.get().then(|| self.settings_page()),
@@ -779,6 +860,7 @@ impl App {
         self.info_open.set(false);
         self.page_open.set(page);
         self.adjusted.set(None);
+        self.end_text_entry();
         // The first open of a new install shows the welcome page (unless Settings was asked for); it is marked seen
         // at once, so it never nags.
         let first = !self.settings.borrow().welcome_seen;
@@ -847,6 +929,7 @@ impl App {
             self.welcome.set(false);
             self.page_open.set(true);
             self.adjusted.set(None);
+            self.end_text_entry();
             self.refresh_flyout();
         } else {
             self.open_flyout_at(None, true);
@@ -858,10 +941,35 @@ impl App {
     /// A click or key on a row of the page.
     fn on_setting(&self, id: u16, part: u8) {
         let page = self.settings_page();
-        match settings_page::action(&page, id, part) {
-            Some(action) => self.apply_action(action),
-            None => self.trace(&format!("setting {id}/{part}: nothing to do")),
+        let action = settings_page::action(&page, id, part);
+        // A click on anything but the field being renamed ends the rename (the name is not kept; Enter keeps it).
+        let renaming = self.rename.borrow().as_ref().and_then(|r| {
+            self.device_slots
+                .borrow()
+                .iter()
+                .position(|k| *k == r.key)
+                .map(|at| row::DEVICE_BASE + at as u16)
+        });
+        if renaming.is_some_and(|rid| rid != id) {
+            *self.rename.borrow_mut() = None;
         }
+        // The shortcut's capture ends on any other click too.
+        if self.hotkey_state.get().waits() && action != Some(Change::HotkeyCapture) {
+            self.hotkey_state.set(HotkeyState::Idle);
+        }
+        match action {
+            Some(action) => self.apply_action(action),
+            None => {
+                self.trace(&format!("setting {id}/{part}: nothing to do"));
+                self.refresh_flyout();
+            }
+        }
+    }
+
+    /// A rename and the wait for a key combination end together (the page closes, opens again, goes back).
+    fn end_text_entry(&self) {
+        *self.rename.borrow_mut() = None;
+        self.hotkey_state.set(HotkeyState::Idle);
     }
 
     /// Carries out what a row asked: the new value reaches the settings file, the source and the screen at once.
@@ -886,6 +994,25 @@ impl App {
                 }
             }
             Change::Language(l) => self.settings.borrow_mut().language = l,
+            Change::Device(rid, op) => {
+                self.device_op(rid, op);
+                return;
+            }
+            Change::HotkeyCapture => {
+                let next = if self.hotkey_state.get().waits() {
+                    HotkeyState::Idle
+                } else {
+                    HotkeyState::Capturing
+                };
+                self.hotkey_state.set(next);
+                *self.rename.borrow_mut() = None;
+                self.refresh_flyout();
+                return;
+            }
+            Change::HotkeyReset => {
+                self.change_hotkey(Hotkey::DEFAULT);
+                return;
+            }
             Change::Open(url) => {
                 self.open_url(url);
                 return;
@@ -902,6 +1029,125 @@ impl App {
             Change::Language(l) => self.language_changed(l),
             _ => self.refresh_flyout(),
         }
+    }
+
+    /// A control of a device row.
+    fn device_op(&self, rid: RowId, op: DeviceOp) {
+        let Some(key) = self.device_of(rid) else {
+            return;
+        };
+        match op {
+            DeviceOp::Show(on) => {
+                devices::set_shown(&mut self.settings.borrow_mut(), &key, on);
+                if let Some(live) = self.source.borrow_mut().live_mut() {
+                    live.set_shown(&key, on);
+                }
+            }
+            DeviceOp::Rename => {
+                let list = self.device_rows();
+                let Some((_, d)) = list.into_iter().find(|(_, d)| d.key == key) else {
+                    return;
+                };
+                self.hotkey_state.set(HotkeyState::Idle);
+                *self.rename.borrow_mut() = Some(Rename::new(key, &d.name, &d.default_name));
+                self.refresh_flyout();
+                return;
+            }
+            DeviceOp::Up | DeviceOp::Down => {
+                let keys: Vec<DeviceKey> =
+                    self.device_rows().into_iter().map(|(_, d)| d.key).collect();
+                let delta = if op == DeviceOp::Up { -1 } else { 1 };
+                if !self
+                    .settings
+                    .borrow_mut()
+                    .arrangement
+                    .move_in(&keys, &key, delta)
+                {
+                    return;
+                }
+                self.arrangement_changed();
+                return;
+            }
+        }
+        self.save_settings();
+        self.resnapshot();
+    }
+
+    /// The user's names or order changed: they reach the source, the settings file, the tray and the screen at once.
+    fn arrangement_changed(&self) {
+        let arrangement = self.settings.borrow().arrangement.clone();
+        if let Some(live) = self.source.borrow_mut().live_mut() {
+            live.set_arrangement(arrangement);
+        }
+        self.save_settings();
+        self.resnapshot();
+    }
+
+    /// A key typed into the field being renamed.
+    fn on_edit(&self, key: EditKey) {
+        let outcome = self
+            .rename
+            .borrow_mut()
+            .as_mut()
+            .map(|r| (r.key(key), r.key.clone()));
+        match outcome {
+            Some((Edited::Editing, _)) => self.refresh_flyout(),
+            Some((Edited::Cancel, _)) => {
+                *self.rename.borrow_mut() = None;
+                self.refresh_flyout();
+            }
+            Some((Edited::Save(name), device)) => {
+                *self.rename.borrow_mut() = None;
+                self.settings
+                    .borrow_mut()
+                    .arrangement
+                    .set_name(&device, &name);
+                self.arrangement_changed();
+            }
+            None if key == EditKey::Escape && self.hotkey_state.get().waits() => {
+                self.hotkey_state.set(HotkeyState::Idle);
+                self.refresh_flyout();
+            }
+            None => {}
+        }
+    }
+
+    /// A key combination typed while the shortcut's row waits for one. One that cannot be a shortcut is ignored and
+    /// the wait goes on.
+    fn on_chord(&self, chord: Chord) {
+        if !self.hotkey_state.get().waits() {
+            return;
+        }
+        match Hotkey::from_chord(chord) {
+            Some(hk) => self.change_hotkey(hk),
+            None => {
+                self.trace(&format!("chord {chord:?}: not a shortcut"));
+                self.hotkey_state.set(HotkeyState::Refused);
+                self.refresh_flyout();
+            }
+        }
+    }
+
+    /// Registers `wanted` in place of the shortcut in use; when another program holds it, the old one stays and the
+    /// row says so.
+    fn change_hotkey(&self, wanted: Hotkey) {
+        let current = self.settings.borrow().hotkey;
+        let done = hotkey::switch(&mut self.registrar(), current, self.hotkey_ok.get(), wanted);
+        self.hotkey_ok.set(done.registered);
+        self.trace(&format!(
+            "hotkey {} -> {}: {}",
+            current.text(),
+            wanted.text(),
+            if done.changed { "changed" } else { "in use" }
+        ));
+        if done.changed {
+            self.settings.borrow_mut().hotkey = wanted;
+            self.save_settings();
+            self.hotkey_state.set(HotkeyState::Idle);
+        } else {
+            self.hotkey_state.set(HotkeyState::InUse);
+        }
+        self.refresh_flyout();
     }
 
     /// The limits or the alerts changed: the source and the tray follow at once.
@@ -1008,11 +1254,12 @@ impl App {
             FlyoutHit::Back => {
                 self.page_open.set(false);
                 self.adjusted.set(None);
+                self.end_text_entry();
                 self.refresh_flyout();
             }
             FlyoutHit::Setting { id, part } => self.on_setting(id, part),
-            // Keys of a text field being edited: the Devices section (rename) takes them.
-            FlyoutHit::Edit(_) => {}
+            FlyoutHit::Edit(key) => self.on_edit(key),
+            FlyoutHit::Chord(chord) => self.on_chord(chord),
             FlyoutHit::None => {}
         }
     }
@@ -1081,6 +1328,8 @@ impl App {
         }
         match msg {
             WM_TRAY => self.on_tray(wparam, lparam),
+            // While the shortcut's row waits for a combination, the one in use is just another key to capture.
+            WM_HOTKEY if self.hotkey_state.get().waits() => {}
             WM_HOTKEY => self.toggle_flyout(None, false),
             WM_FLYOUT_HIT => self.on_flyout_hit(decode_hit(wparam.0)),
             WM_FLYOUT_CLOSED => {
@@ -1321,6 +1570,15 @@ mod tests {
             FlyoutHit::Edit(EditKey::Char('a')),
             FlyoutHit::Edit(EditKey::Char('ç')),
             FlyoutHit::Edit(EditKey::Char('\u{10ffff}')),
+            FlyoutHit::Chord(Chord {
+                vk: b'B' as u16,
+                mods: Chord::CONTROL | Chord::ALT,
+            }),
+            FlyoutHit::Chord(Chord {
+                vk: u16::MAX,
+                mods: u8::MAX,
+            }),
+            FlyoutHit::Chord(Chord { vk: 0, mods: 0 }),
         ] {
             assert_eq!(decode_hit(encode_hit(hit)), hit, "{hit:?}");
         }

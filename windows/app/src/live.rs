@@ -10,14 +10,17 @@
 use std::collections::BTreeMap;
 
 use juicebar_core::estimator::{self, Notice as CoreNotice, NoticeKind, Priors, Reading};
+use juicebar_core::hidpp::catalog;
 use juicebar_core::lighting::{LightingEvent, SavedLight};
 use juicebar_core::logitech::Logitech;
 use juicebar_core::registry::{Registry, UserList};
-use juicebar_core::snapshot::{DeviceInput, DeviceView, Limits, Snapshot};
+use juicebar_core::snapshot::{
+    Arrangement, DeviceInput, DeviceView, Limits, Snapshot, connection_text, display_name,
+};
 use juicebar_core::store::Tracker;
 use juicebar_core::strings::{self, Lang, id};
 use juicebar_core::types::{
-    Action, DeviceInfo, DeviceKey, Now, Presence, ProviderEvent, TransportEvent,
+    Action, DeviceInfo, DeviceKey, Kind, Now, Presence, ProviderEvent, TransportEvent,
 };
 
 use crate::notify::Notice;
@@ -81,6 +84,8 @@ pub struct StartConfig {
     pub rgb_economy: bool,
     /// The devices the user hid in an earlier run.
     pub hidden: Vec<DeviceKey>,
+    /// The names and the order the user gave the devices in an earlier run.
+    pub arrangement: Arrangement,
     /// The lighting levels an earlier run kept (device key, `SavedLight` text); text that does not read is dropped.
     pub lights: Vec<(DeviceKey, String)>,
 }
@@ -94,19 +99,29 @@ pub enum LightChange {
     Drop(DeviceKey),
 }
 
-/// One entry of the "Dispositivos" menu.
+/// One device of the Settings page's Dispositivos section.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // the Dispositivos section of the Settings page (part 2) lists them
 pub struct DeviceChoice {
     pub key: DeviceKey,
+    /// The name shown: the one the user gave, else the catalog's short name.
     pub name: String,
+    /// The catalog's short name (what an empty name goes back to).
+    pub default_name: String,
+    /// `None` for a device hidden in an earlier run that this run has not seen.
+    pub kind: Option<Kind>,
+    /// "Receptor", "Dongle", "Bluetooth", "Cabo USB"; empty when not seen.
+    pub connection: String,
     pub shown: bool,
+    /// The device is on now.
+    pub on: bool,
 }
 
 pub struct Live<H: Host> {
     host: H,
     lang: Lang,
     prefs: Prefs,
+    /// The names and the order the user gave the devices.
+    arrangement: Arrangement,
     rgb_economy: bool,
     provider: Logitech,
     registry: Registry,
@@ -158,6 +173,7 @@ impl<H: Host> Live<H> {
             host,
             lang: cfg.lang,
             prefs: cfg.prefs,
+            arrangement: cfg.arrangement,
             rgb_economy: cfg.rgb_economy,
             provider: Logitech::new(),
             registry: Registry::with_user_list(&list),
@@ -184,7 +200,9 @@ impl<H: Host> Live<H> {
         }
         for (key, text) in histories {
             let priors = priors_for_key(&key);
-            let name = priors.map_or_else(|| key.0.clone(), |p| p.model.to_string());
+            let name = live.tracker_name(&key, || {
+                priors.map_or_else(|| key.0.clone(), |p| p.model.to_string())
+            });
             match Tracker::restore(
                 &text,
                 &name,
@@ -280,7 +298,6 @@ impl<H: Host> Live<H> {
     }
 
     /// Shows or hides a device; true when its state changed.
-    #[allow(dead_code)] // as `DeviceChoice`
     pub fn set_shown(&mut self, key: &DeviceKey, shown: bool) -> bool {
         let changed = !self.registry.set_registered(key, shown).is_empty();
         if changed {
@@ -289,27 +306,79 @@ impl<H: Host> Live<H> {
         changed
     }
 
-    /// Devices the user hid, seen or not, for `settings.txt`.
-    #[allow(dead_code)] // as `DeviceChoice`
-    pub fn hidden(&self) -> Vec<DeviceKey> {
-        self.registry.user_list().removed
-    }
-
-    /// Every device seen this run, by name, for the "Dispositivos" menu.
-    #[allow(dead_code)] // as `DeviceChoice`
+    /// Every device seen this run, and every one hidden in an earlier run, in the order the user sees them: the
+    /// ordered ones first, then those that are on, then by name.
     pub fn devices(&self) -> Vec<DeviceChoice> {
         let mut out: Vec<DeviceChoice> = self
             .registry
             .entries()
             .iter()
-            .map(|e| DeviceChoice {
-                key: e.info.key.clone(),
-                name: e.info.name.clone(),
-                shown: e.registered,
+            .map(|e| {
+                let default_name = display_name(&e.info);
+                DeviceChoice {
+                    key: e.info.key.clone(),
+                    name: self
+                        .arrangement
+                        .name_of(&e.info.key)
+                        .map_or_else(|| default_name.clone(), str::to_string),
+                    default_name,
+                    kind: Some(e.info.kind),
+                    connection: connection_text(e.info.connection, self.lang),
+                    shown: e.registered,
+                    on: e.online(),
+                }
             })
             .collect();
-        out.sort_by(|a, b| (a.name.to_lowercase(), &a.key).cmp(&(b.name.to_lowercase(), &b.key)));
+        for key in self.registry.user_list().removed {
+            if out.iter().any(|d| d.key == key) {
+                continue;
+            }
+            let default_name =
+                catalog::short_name(&key.0).map_or_else(|| key.0.clone(), str::to_string);
+            out.push(DeviceChoice {
+                name: self
+                    .arrangement
+                    .name_of(&key)
+                    .map_or_else(|| default_name.clone(), str::to_string),
+                default_name,
+                kind: None,
+                connection: String::new(),
+                shown: false,
+                on: false,
+                key,
+            });
+        }
+        out.sort_by_cached_key(|d| self.arrangement.sort_key(&d.key, d.on, &d.name));
         out
+    }
+
+    /// The user named or ordered devices again: the panel, the tooltip, the notices and the warnings follow.
+    pub fn set_arrangement(&mut self, arrangement: Arrangement) {
+        if self.arrangement == arrangement {
+            return;
+        }
+        self.arrangement = arrangement;
+        let keys: Vec<DeviceKey> = self.trackers.keys().cloned().collect();
+        for key in keys {
+            let name = self.tracker_name(&key, || {
+                priors_for_key(&key).map_or_else(|| key.0.clone(), |p| p.model.to_string())
+            });
+            if let Some(t) = self.trackers.get_mut(&key) {
+                t.history.name = name;
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// The name a device's estimator speaks of it with (the low-battery text): the user's, else what the registry
+    /// knows of the device, else `fallback`.
+    fn tracker_name(&self, key: &DeviceKey, fallback: impl FnOnce() -> String) -> String {
+        if let Some(n) = self.arrangement.name_of(key) {
+            return n.to_string();
+        }
+        self.registry
+            .get(key)
+            .map_or_else(fallback, |e| e.info.name.clone())
     }
 
     /// Every device off, every tracker flushed: the lines reach the files before the tray icon goes.
@@ -364,6 +433,7 @@ impl<H: Host> Live<H> {
             })
             .collect();
         Snapshot::build_with(&inputs, now, self.lang.tag(), self.prefs.limits)
+            .arranged(&self.arrangement, self.lang)
     }
 
     /// The user changed the icon's limits or the alerts: every tracker learns them and the next snapshot shows them.
@@ -487,12 +557,16 @@ impl<H: Host> Live<H> {
     }
 
     fn ensure_tracker(&mut self, info: &DeviceInfo, now: &Now) {
+        let name = self
+            .arrangement
+            .name_of(&info.key)
+            .map_or_else(|| info.name.clone(), str::to_string);
         if let Some(t) = self.trackers.get_mut(&info.key) {
-            t.history.name = info.name.clone();
+            t.history.name = name;
             return;
         }
         let mut tracker = Tracker::for_model(
-            &info.name,
+            &name,
             priors_for_key(&info.key),
             i64::from(now.utc_offset),
             self.lang,
@@ -714,6 +788,7 @@ mod tests {
             prefs: Prefs::default(),
             rgb_economy: false,
             hidden: Vec::new(),
+            arrangement: Arrangement::default(),
             lights: Vec::new(),
         }
     }
@@ -986,7 +1061,6 @@ mod tests {
         let snap = l.snapshot(&at(2.0));
         assert_eq!(snap.devices.len(), 1);
         assert_eq!(snap.devices[0].name, "G915 X");
-        assert_eq!(l.hidden(), vec![g703()]);
         let menu = l.devices();
         assert_eq!(
             menu.iter()
@@ -996,7 +1070,6 @@ mod tests {
         );
         assert!(l.set_shown(&g703(), true));
         assert_eq!(l.snapshot(&at(2.0)).devices.len(), 2);
-        assert!(l.hidden().is_empty());
     }
 
     #[test]
@@ -1013,7 +1086,6 @@ mod tests {
         );
         assert!(l.snapshot(&at(2.0)).devices.is_empty());
         assert_eq!(l.devices().len(), 1);
-        assert_eq!(l.hidden(), vec![g703()]);
     }
 
     #[test]
@@ -1496,5 +1568,196 @@ mod tests {
         );
         assert_eq!(hex(&[0x10, 0x00, 0x00, 0x00]), "10 00 00 00");
         assert_eq!(hex(&[]), "");
+    }
+
+    fn two_devices() -> Live<Fake> {
+        let mut l = live(vec![]);
+        l.execute(
+            vec![
+                appear(&g703(), "G703"),
+                online(&g703(), true, 1.0),
+                battery(&g703(), 60.0, Charging::Discharging, 2.0),
+                appear(&g915(), "G915 X"),
+                online(&g915(), true, 1.0),
+                battery(&g915(), 70.0, Charging::Discharging, 2.0),
+            ],
+            at(3.0),
+        );
+        l
+    }
+
+    fn named(pairs: &[(&DeviceKey, &str)], order: &[&DeviceKey]) -> Arrangement {
+        let mut a = Arrangement::default();
+        for (k, n) in pairs {
+            a.set_name(k, n);
+        }
+        a.order = order.iter().map(|k| (*k).clone()).collect();
+        a
+    }
+
+    #[test]
+    fn a_name_the_user_gave_reaches_the_panel_the_tooltip_and_the_list() {
+        let mut l = two_devices();
+        l.take_dirty();
+        l.set_arrangement(named(&[(&g703(), "Mouse da mesa")], &[]));
+        assert!(l.take_dirty(), "the app takes a new snapshot");
+        let snap = l.snapshot(&at(3.0));
+        let names: Vec<&str> = snap.devices.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["G915 X", "Mouse da mesa"]);
+        assert!(
+            snap.tooltip.contains("Mouse da mesa 60%"),
+            "{}",
+            snap.tooltip
+        );
+        assert!(!snap.tooltip.contains("G703"));
+        let list = l.devices();
+        let shown: Vec<(&str, &str)> = list
+            .iter()
+            .map(|d| (d.name.as_str(), d.default_name.as_str()))
+            .collect();
+        assert_eq!(shown, [("G915 X", "G915 X"), ("Mouse da mesa", "G703")]);
+        // The same arrangement again changes nothing; an empty one gives the catalog's names back.
+        l.take_dirty();
+        l.set_arrangement(named(&[(&g703(), "Mouse da mesa")], &[]));
+        assert!(!l.take_dirty());
+        l.set_arrangement(Arrangement::default());
+        assert_eq!(l.snapshot(&at(3.0)).devices[0].name, "G703");
+    }
+
+    #[test]
+    fn the_name_reaches_the_notices_and_the_warnings() {
+        let mut l = two_devices();
+        l.set_arrangement(named(&[(&g703(), "Mouse da mesa")], &[]));
+        l.execute(
+            vec![battery(&g703(), 8.0, Charging::Discharging, 600.0)],
+            at(600.0),
+        );
+        let n = l.take_notices(&at(600.0));
+        assert_eq!(n.len(), 1, "{n:?}");
+        assert_eq!(n[0].title, "Mouse da mesa com 8%");
+        let snap = l.snapshot(&at(600.0));
+        let mouse = snap.devices.iter().find(|d| d.key == g703()).unwrap();
+        assert_eq!(mouse.warning.as_deref(), Some("Mouse da mesa com 8%"));
+        // Taking the name away brings the model name back into the warning too.
+        l.set_arrangement(Arrangement::default());
+        let snap = l.snapshot(&at(600.0));
+        let mouse = snap.devices.iter().find(|d| d.key == g703()).unwrap();
+        assert_eq!(mouse.warning.as_deref(), Some("G703 com 8%"));
+    }
+
+    #[test]
+    fn a_name_given_in_an_earlier_run_is_there_when_the_device_appears() {
+        let c = StartConfig {
+            arrangement: named(&[(&g703(), "Mouse da mesa")], &[&g915(), &g703()]),
+            ..cfg()
+        };
+        let mut l = Live::start(Fake::default(), vec![], c, at(0.0));
+        l.execute(
+            vec![
+                appear(&g703(), "G703"),
+                online(&g703(), true, 1.0),
+                battery(&g703(), 8.0, Charging::Discharging, 2.0),
+                appear(&g915(), "G915 X"),
+                online(&g915(), true, 1.0),
+                battery(&g915(), 70.0, Charging::Discharging, 2.0),
+            ],
+            at(3.0),
+        );
+        let names: Vec<String> = l
+            .snapshot(&at(3.0))
+            .devices
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        assert_eq!(names, ["G915 X", "Mouse da mesa"], "the saved order");
+        let n = l.take_notices(&at(3.0));
+        assert!(
+            n.iter().all(|n| n.title.starts_with("Mouse da mesa")),
+            "{n:?}"
+        );
+    }
+
+    #[test]
+    fn the_users_order_puts_a_device_first_even_when_it_is_off() {
+        let mut l = two_devices();
+        l.execute(vec![online(&g703(), false, 100.0)], at(100.0));
+        let order = |l: &Live<Fake>| -> Vec<String> {
+            l.snapshot(&at(101.0))
+                .devices
+                .into_iter()
+                .map(|d| d.name)
+                .collect()
+        };
+        assert_eq!(order(&l), ["G915 X", "G703"], "on before off as before");
+        l.set_arrangement(named(&[], &[&g703(), &g915()]));
+        assert_eq!(order(&l), ["G703", "G915 X"]);
+        let listed: Vec<String> = l.devices().into_iter().map(|d| d.name).collect();
+        assert_eq!(
+            listed,
+            ["G703", "G915 X"],
+            "the list follows the same order"
+        );
+        // A device not ordered yet goes after the ordered one.
+        l.set_arrangement(named(&[], &[&g915()]));
+        assert_eq!(order(&l), ["G915 X", "G703"]);
+    }
+
+    #[test]
+    fn hiding_a_device_takes_it_out_of_the_icons_color_and_showing_brings_it_back() {
+        use juicebar_core::snapshot::Juice;
+        let mut l = live(vec![]);
+        l.execute(
+            vec![
+                appear(&g703(), "G703"),
+                online(&g703(), true, 1.0),
+                battery(&g703(), 10.0, Charging::Discharging, 2.0),
+                appear(&g915(), "G915 X"),
+                online(&g915(), true, 1.0),
+                battery(&g915(), 90.0, Charging::Discharging, 2.0),
+            ],
+            at(3.0),
+        );
+        assert_eq!(
+            l.snapshot(&at(3.0)).icon.juice,
+            Juice::Red,
+            "10 is under 20"
+        );
+        assert!(l.set_shown(&g703(), false));
+        let snap = l.snapshot(&at(3.0));
+        assert_eq!(snap.icon.juice, Juice::Green, "only the 90 % one counts");
+        assert_eq!(snap.devices.len(), 1);
+        assert!(!snap.tooltip.contains("G703"), "{}", snap.tooltip);
+        // It stays in the list, hidden, and comes back when shown.
+        let list = l.devices();
+        assert_eq!(list.iter().filter(|d| !d.shown).count(), 1);
+        assert!(l.set_shown(&g703(), true));
+        assert_eq!(l.snapshot(&at(3.0)).icon.juice, Juice::Red);
+    }
+
+    #[test]
+    fn a_device_hidden_in_an_earlier_run_is_listed_before_it_is_seen_and_can_be_shown() {
+        let c = StartConfig {
+            hidden: vec![g703()],
+            ..cfg()
+        };
+        let mut l = Live::start(Fake::default(), vec![], c, at(0.0));
+        let list = l.devices();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].key, g703());
+        assert_eq!((list[0].name.as_str(), list[0].shown), ("G703", false));
+        assert_eq!(list[0].kind, None);
+        assert!(list[0].connection.is_empty());
+        // Shown again before it appears: it appears shown.
+        l.set_shown(&g703(), true);
+        l.execute(
+            vec![appear(&g703(), "G703"), online(&g703(), true, 1.0)],
+            at(2.0),
+        );
+        assert_eq!(l.snapshot(&at(2.0)).devices.len(), 1);
+        let list = l.devices();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].kind, Some(Kind::Mouse));
+        assert!(list[0].shown && list[0].on);
+        assert_eq!(list[0].connection, "Receptor");
     }
 }

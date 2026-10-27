@@ -8,6 +8,8 @@
 //! `SettingsSection` of rows; to add a control that exists already (toggle, choice, stepper, link,
 //! value, text field), build its row; nothing else in this crate changes.
 
+use crate::model::Glyph;
+
 /// The id of a row; the app picks them and reads them back from a hit.
 pub type RowId = u16;
 
@@ -19,6 +21,14 @@ pub const PART_MINUS: u8 = 1;
 pub const PART_PLUS: u8 = 2;
 /// Segment `k` of a choice is `PART_SEGMENT + k`.
 pub const PART_SEGMENT: u8 = 3;
+/// The switch of a device row (show it in the panel or not).
+pub const PART_SHOW: u8 = 16;
+/// The pencil of a device row (rename it).
+pub const PART_RENAME: u8 = 17;
+/// The up arrow of a device row.
+pub const PART_UP: u8 = 18;
+/// The down arrow of a device row.
+pub const PART_DOWN: u8 = 19;
 
 /// What a row holds at its right end.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,11 +53,21 @@ pub enum RowKind {
     Link { action: String },
     /// A value shown and not changed here.
     Value { text: String },
-    /// A text field. `editing` shows the caret; the flyout then sends the keys as `FlyoutHit::Edit`.
+    /// A text field. `editing` shows the caret; the flyout then sends the keys as `FlyoutHit::Edit`. `selected`
+    /// shows the whole text selected (the next key replaces it).
     Text {
         value: String,
         placeholder: String,
         editing: bool,
+        selected: bool,
+    },
+    /// A device: its glyph, the name as `label` and the connection as `detail`, then a switch (shown in the panel),
+    /// a pencil (rename) and the up and down arrows (order). An arrow that cannot move is drawn quiet.
+    Device {
+        glyph: Glyph,
+        shown: bool,
+        can_up: bool,
+        can_down: bool,
     },
     /// The About block: the mark, the name and version, and the credit.
     Identity {
@@ -146,6 +166,42 @@ impl SettingsRow {
                 value: value.to_string(),
                 placeholder: String::new(),
                 editing,
+                selected: false,
+            },
+        )
+    }
+
+    /// A text field that shows `placeholder` while it is empty and not being edited.
+    pub fn with_placeholder(mut self, text: &str) -> SettingsRow {
+        if let RowKind::Text { placeholder, .. } = &mut self.kind {
+            *placeholder = text.to_string();
+        }
+        self
+    }
+
+    /// A text field being edited whose whole text is selected.
+    pub fn with_selected(mut self, on: bool) -> SettingsRow {
+        if let RowKind::Text { selected, .. } = &mut self.kind {
+            *selected = on;
+        }
+        self
+    }
+
+    pub fn device(
+        id: RowId,
+        name: &str,
+        glyph: Glyph,
+        shown: bool,
+        (can_up, can_down): (bool, bool),
+    ) -> SettingsRow {
+        SettingsRow::new(
+            id,
+            name,
+            RowKind::Device {
+                glyph,
+                shown,
+                can_up,
+                can_down,
             },
         )
     }
@@ -193,6 +249,7 @@ impl SettingsRow {
                     | RowKind::Stepper { .. }
                     | RowKind::Link { .. }
                     | RowKind::Text { .. }
+                    | RowKind::Device { .. }
             )
     }
 
@@ -240,6 +297,22 @@ pub enum EditKey {
     Escape,
 }
 
+/// A key combination typed while the page waits for one (the shortcut's capture).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Chord {
+    /// The key's virtual-key code (a letter, a digit, an F key...).
+    pub vk: u16,
+    /// `MOD_*` bits as Windows' `RegisterHotKey` takes them.
+    pub mods: u8,
+}
+
+impl Chord {
+    pub const ALT: u8 = 1;
+    pub const CONTROL: u8 = 2;
+    pub const SHIFT: u8 = 4;
+    pub const WIN: u8 = 8;
+}
+
 /// The Settings page.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiSettings {
@@ -248,6 +321,8 @@ pub struct UiSettings {
     pub sections: Vec<SettingsSection>,
     /// The row that has the keyboard focus (shown with a ring); `None` until a key moves it.
     pub focus: Option<RowId>,
+    /// The page waits for a key combination: every key but Esc then arrives as `FlyoutHit::Chord`.
+    pub capturing: bool,
 }
 
 impl UiSettings {
@@ -256,6 +331,7 @@ impl UiSettings {
             title: title.to_string(),
             sections,
             focus: None,
+            capturing: false,
         }
     }
 
@@ -336,6 +412,16 @@ impl UiSettings {
                 _ => None,
             },
             RowKind::Link { .. } | RowKind::Text { .. } => act.then_some((row.id, PART_ROW)),
+            // Space shows or hides, Enter renames, Left and Right move the device up and down.
+            RowKind::Device {
+                can_up, can_down, ..
+            } => match key {
+                NavKey::Space => Some((row.id, PART_SHOW)),
+                NavKey::Enter => Some((row.id, PART_RENAME)),
+                NavKey::Left if *can_up => Some((row.id, PART_UP)),
+                NavKey::Right if *can_down => Some((row.id, PART_DOWN)),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -542,5 +628,73 @@ mod tests {
             .push(SettingsRow::text(8, "Nome", "G703", true));
         assert!(p.editing());
         assert!(p.row(8).unwrap().is_editing() && p.focusable().contains(&8));
+    }
+
+    fn device_page() -> UiSettings {
+        UiSettings::new(
+            "Configurações",
+            vec![SettingsSection::new(
+                "Dispositivos",
+                vec![
+                    SettingsRow::device(100, "G703", Glyph::Mouse, true, (false, true)),
+                    SettingsRow::device(101, "G915 X", Glyph::Keyboard, false, (true, true)),
+                    SettingsRow::device(102, "G733", Glyph::Headset, true, (true, false)),
+                    SettingsRow::note(103, "ajuda"),
+                ],
+            )],
+        )
+    }
+
+    #[test]
+    fn a_device_row_takes_the_focus_and_the_keys_press_its_controls() {
+        let mut p = device_page();
+        assert_eq!(p.focusable(), vec![100, 101, 102]);
+        p.focus = Some(101);
+        assert_eq!(p.activate(NavKey::Space), Some((101, PART_SHOW)));
+        assert_eq!(p.activate(NavKey::Enter), Some((101, PART_RENAME)));
+        assert_eq!(p.activate(NavKey::Left), Some((101, PART_UP)));
+        assert_eq!(p.activate(NavKey::Right), Some((101, PART_DOWN)));
+        // Up and Down move the focus, they never act.
+        assert_eq!(p.activate(NavKey::Up), None);
+        assert_eq!(p.activate(NavKey::Tab), None);
+        // The arrows stop where the list stops.
+        p.focus = Some(100);
+        assert_eq!(p.activate(NavKey::Left), None);
+        assert_eq!(p.activate(NavKey::Right), Some((100, PART_DOWN)));
+        p.focus = Some(102);
+        assert_eq!(p.activate(NavKey::Right), None);
+        assert_eq!(p.activate(NavKey::Left), Some((102, PART_UP)));
+    }
+
+    #[test]
+    fn a_device_row_in_rename_is_a_text_field_that_takes_over_the_keys() {
+        let mut p = device_page();
+        assert!(!p.editing());
+        p.sections[0].rows[1] = SettingsRow::text(101, "Nome para G915 X", "G915 X", true)
+            .with_selected(true)
+            .with_placeholder("G915 X");
+        assert!(p.editing());
+        assert_eq!(
+            p.row(101).unwrap().kind,
+            RowKind::Text {
+                value: "G915 X".into(),
+                placeholder: "G915 X".into(),
+                editing: true,
+                selected: true
+            }
+        );
+        // The selection and the placeholder belong to text fields only.
+        let toggle = SettingsRow::toggle(1, "x", true)
+            .with_selected(true)
+            .with_placeholder("p");
+        assert_eq!(toggle.kind, RowKind::Toggle { on: true });
+    }
+
+    #[test]
+    fn the_page_waits_for_keys_only_when_told_to() {
+        let mut p = device_page();
+        assert!(!p.capturing);
+        p.capturing = true;
+        assert!(p.capturing && !p.editing());
     }
 }

@@ -14,7 +14,10 @@
 //! full_notice=1
 //! do_not_disturb=0
 //! language=auto
-//! hidden=logitech-hidpp:0AB5
+//! hotkey=Ctrl+Alt+B
+//! device.logitech-hidpp:0AB5.shown=0
+//! device.logitech-hidpp:40B5.name=Teclado da mesa
+//! device.logitech-hidpp:40B5.order=0
 //! light=logitech-hidpp:40B5 brightness:13
 //! ```
 //!
@@ -26,6 +29,12 @@
 //! * `smart_warning` and `full_notice` switch those two notices (and the smart warning's red) on or off;
 //!   `do_not_disturb=1` shows no balloon at all, the icon still changes.
 //! * `language` is `auto` (Windows' display language), `pt-BR` or `en`.
+//! * `hotkey` is the global shortcut that opens the panel (`Ctrl+Alt+B` by default; it must hold Ctrl, Alt or Win).
+//! * `device.<key>.shown=0` hides a device from the panel, the tooltip and the icon's colour (the key is the
+//!   device's registry key, which holds no serial number or address); `.name` is the name the user gave it (at most
+//!   24 characters; none means the catalog's short name); `.order` is its place in the user's order (0 first).
+//!   A device with no line keeps the defaults: shown, the catalog's name, after the ordered ones. The older
+//!   `hidden=<key>` line is still read.
 //! * `welcome_seen` is set once the first-open page has been shown, so it never comes back.
 //! * `light` is the level the RGB economy took a device's lighting down from, kept until it is restored, so a run
 //!   that ended with the lighting down still knows what to give back (the core's `SavedLight` text).
@@ -33,10 +42,12 @@
 //! Start with Windows is not here: its source of truth is the Run key (`runkey`).
 //! Unknown lines and comments are ignored, so a newer file still reads in an older build.
 
-use juicebar_core::snapshot::Limits;
+use juicebar_core::snapshot::{Arrangement, Limits};
 use juicebar_core::strings::Lang;
 use juicebar_core::types::DeviceKey;
 use juicebar_ui::model::Theme;
+
+use crate::hotkey::Hotkey;
 
 /// The flyout's theme as the user chose it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -144,8 +155,12 @@ pub struct Settings {
     /// No balloon at all while on.
     pub do_not_disturb: bool,
     pub language: LangChoice,
+    /// The global shortcut that opens the panel.
+    pub hotkey: Hotkey,
     /// Devices the user hid from the flyout and the icon (the registry's removed list).
     pub hidden: Vec<DeviceKey>,
+    /// The names the user gave the devices and the order he put them in.
+    pub arrangement: Arrangement,
     /// The lighting level kept for each device the economy turned down (device key, `SavedLight` text).
     pub lights: Vec<(DeviceKey, String)>,
 }
@@ -164,7 +179,9 @@ impl Default for Settings {
             full_notice: true,
             do_not_disturb: false,
             language: LangChoice::Auto,
+            hotkey: Hotkey::DEFAULT,
             hidden: Vec::new(),
+            arrangement: Arrangement::default(),
             lights: Vec::new(),
         }
     }
@@ -178,6 +195,8 @@ fn number(v: &str, min: i32, max: i32) -> Option<u8> {
 impl Settings {
     pub fn parse(text: &str) -> Settings {
         let mut s = Settings::default();
+        // (order, place in the file, key): sorted at the end, so a repeated or missing number is harmless.
+        let mut ranked: Vec<(u32, usize, DeviceKey)> = Vec::new();
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -186,7 +205,12 @@ impl Settings {
             let Some((name, value)) = line.split_once('=') else {
                 continue;
             };
-            match (name.trim(), value.trim()) {
+            let (name, value) = (name.trim(), value.trim());
+            if let Some(rest) = name.strip_prefix("device.") {
+                s.device_line(rest, value, &mut ranked);
+                continue;
+            }
+            match (name, value) {
                 ("rgb_economy", v) => s.rgb_economy = v == "1",
                 ("welcome_seen", v) => s.welcome_seen = v == "1",
                 ("theme", v) => s.theme = ThemeChoice::from_tag(v).unwrap_or_default(),
@@ -204,6 +228,7 @@ impl Settings {
                 ("full_notice", v) => s.full_notice = v != "0",
                 ("do_not_disturb", v) => s.do_not_disturb = v == "1",
                 ("language", v) => s.language = LangChoice::from_tag(v).unwrap_or_default(),
+                ("hotkey", v) => s.hotkey = Hotkey::parse(v).unwrap_or(Hotkey::DEFAULT),
                 ("hidden", v) if !v.is_empty() => {
                     let key = DeviceKey(v.to_string());
                     if !s.hidden.contains(&key) {
@@ -225,14 +250,47 @@ impl Settings {
                 _ => {}
             }
         }
+        ranked.sort();
+        for (_, _, key) in ranked {
+            if !s.arrangement.order.contains(&key) {
+                s.arrangement.order.push(key);
+            }
+        }
         s.keep_limits_apart();
         s
+    }
+
+    /// One `device.<key>.<field>=value` line (`rest` is what follows `device.`).
+    fn device_line(&mut self, rest: &str, value: &str, ranked: &mut Vec<(u32, usize, DeviceKey)>) {
+        // The key may hold dots of its own: the field is what follows the last one.
+        let Some((key, field)) = rest.rsplit_once('.') else {
+            return;
+        };
+        if key.is_empty() {
+            return;
+        }
+        let key = DeviceKey(key.to_string());
+        match field {
+            "shown" if value == "0" => {
+                if !self.hidden.contains(&key) {
+                    self.hidden.push(key);
+                }
+            }
+            "shown" if value == "1" => self.hidden.retain(|k| *k != key),
+            "name" => self.arrangement.set_name(&key, value),
+            "order" => {
+                if let Ok(n) = value.parse::<u32>() {
+                    ranked.push((n, ranked.len(), key));
+                }
+            }
+            _ => {}
+        }
     }
 
     pub fn encode(&self) -> String {
         let flag = |b: bool| u8::from(b);
         let mut out = format!(
-            "rgb_economy={}\nwelcome_seen={}\ntheme={}\nicon_animation={}\ngreen_above={}\nred_below={}\nwarn_below={}\nsmart_warning={}\nfull_notice={}\ndo_not_disturb={}\nlanguage={}\n",
+            "rgb_economy={}\nwelcome_seen={}\ntheme={}\nicon_animation={}\ngreen_above={}\nred_below={}\nwarn_below={}\nsmart_warning={}\nfull_notice={}\ndo_not_disturb={}\nlanguage={}\nhotkey={}\n",
             flag(self.rgb_economy),
             flag(self.welcome_seen),
             self.theme.tag(),
@@ -244,11 +302,31 @@ impl Settings {
             flag(self.full_notice),
             flag(self.do_not_disturb),
             self.language.tag(),
+            self.hotkey.text(),
         );
-        for key in &self.hidden {
-            out.push_str("hidden=");
-            out.push_str(&key.0);
-            out.push('\n');
+        // Every device the user touched, the ordered ones first.
+        let mut keys: Vec<&DeviceKey> = self.arrangement.order.iter().collect();
+        let others = self
+            .arrangement
+            .names
+            .iter()
+            .map(|(k, _)| k)
+            .chain(&self.hidden);
+        for key in others {
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+        for key in keys {
+            if self.hidden.contains(key) {
+                out.push_str(&format!("device.{}.shown=0\n", key.0));
+            }
+            if let Some(name) = self.arrangement.name_of(key) {
+                out.push_str(&format!("device.{}.name={}\n", key.0, name));
+            }
+            if let Some(rank) = self.arrangement.rank(key) {
+                out.push_str(&format!("device.{}.order={}\n", key.0, rank));
+            }
         }
         for (key, text) in &self.lights {
             out.push_str(&format!("light={} {}\n", key.0, text));
@@ -313,6 +391,7 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use juicebar_ui::settings::Chord;
 
     #[test]
     fn a_missing_or_empty_file_is_the_defaults() {
@@ -364,10 +443,21 @@ mod tests {
             full_notice: false,
             do_not_disturb: true,
             language: LangChoice::Pt,
+            hotkey: Hotkey {
+                mods: Chord::WIN | Chord::ALT,
+                vk: 0x7A,
+            },
             hidden: vec![
                 DeviceKey("logitech-hidpp:0AB5".into()),
                 DeviceKey("os-bluetooth:ab:cd".into()),
             ],
+            arrangement: Arrangement {
+                names: vec![(DeviceKey("logitech-hidpp:40B5".into()), "Teclado".into())],
+                order: vec![
+                    DeviceKey("logitech-hidpp:40B5".into()),
+                    DeviceKey("logitech-hidpp:0AB5".into()),
+                ],
+            },
             lights: vec![(
                 DeviceKey("logitech-hidpp:40B5".into()),
                 "brightness:13".into(),
@@ -376,7 +466,7 @@ mod tests {
         let text = s.encode();
         assert_eq!(
             text,
-            "rgb_economy=1\nwelcome_seen=1\ntheme=dark\nicon_animation=0\ngreen_above=70\nred_below=35\nwarn_below=25\nsmart_warning=0\nfull_notice=0\ndo_not_disturb=1\nlanguage=pt-BR\nhidden=logitech-hidpp:0AB5\nhidden=os-bluetooth:ab:cd\nlight=logitech-hidpp:40B5 brightness:13\n"
+            "rgb_economy=1\nwelcome_seen=1\ntheme=dark\nicon_animation=0\ngreen_above=70\nred_below=35\nwarn_below=25\nsmart_warning=0\nfull_notice=0\ndo_not_disturb=1\nlanguage=pt-BR\nhotkey=Alt+Win+F11\ndevice.logitech-hidpp:40B5.name=Teclado\ndevice.logitech-hidpp:40B5.order=0\ndevice.logitech-hidpp:0AB5.shown=0\ndevice.logitech-hidpp:0AB5.order=1\ndevice.os-bluetooth:ab:cd.shown=0\nlight=logitech-hidpp:40B5 brightness:13\n"
         );
         assert_eq!(Settings::parse(&text), s);
         // Each choice of the two enumerations survives a round trip on its own.
@@ -517,6 +607,105 @@ light= x
             )
             .lights
             .is_empty()
+        );
+    }
+
+    fn key(k: &str) -> DeviceKey {
+        DeviceKey(k.to_string())
+    }
+
+    #[test]
+    fn the_shortcut_is_kept_and_an_unreadable_one_falls_back_to_the_default() {
+        assert_eq!(Settings::default().hotkey, Hotkey::DEFAULT);
+        assert_eq!(
+            Settings::parse("hotkey=Ctrl+Shift+F5\n").hotkey.text(),
+            "Ctrl+Shift+F5"
+        );
+        for bad in [
+            "hotkey=\n",
+            "hotkey=B\n",
+            "hotkey=Alt+F4\n",
+            "hotkey=Ctrl+Ç\n",
+        ] {
+            assert_eq!(Settings::parse(bad).hotkey, Hotkey::DEFAULT, "{bad:?}");
+        }
+        assert_eq!(Settings::parse("rgb_economy=1\n").hotkey, Hotkey::DEFAULT);
+    }
+
+    #[test]
+    fn device_lines_read_names_order_and_visibility_and_write_back_the_same() {
+        let text = "device.logitech-hidpp:40B5.name=Teclado da mesa\n\
+                    device.logitech-hidpp:40B5.order=1\n\
+                    device.logitech-hidpp:4086.order=0\n\
+                    device.logitech-hidpp:0AB5.shown=0\n\
+                    device.os-bluetooth:ab:cd.name=Fones\n";
+        let s = Settings::parse(text);
+        assert_eq!(s.hidden, vec![key("logitech-hidpp:0AB5")]);
+        assert_eq!(
+            s.arrangement.order,
+            vec![key("logitech-hidpp:4086"), key("logitech-hidpp:40B5")]
+        );
+        assert_eq!(
+            s.arrangement.name_of(&key("logitech-hidpp:40B5")),
+            Some("Teclado da mesa")
+        );
+        assert_eq!(
+            s.arrangement.name_of(&key("os-bluetooth:ab:cd")),
+            Some("Fones")
+        );
+        let again = Settings::parse(&s.encode());
+        assert_eq!(again, s);
+        assert!(s.encode().contains("device.logitech-hidpp:4086.order=0\n"));
+        assert!(s.encode().contains("device.logitech-hidpp:40B5.order=1\n"));
+    }
+
+    #[test]
+    fn a_name_can_hold_equals_signs_and_is_cut_to_24_characters() {
+        let s = Settings::parse(
+            "device.k:1.name=  a=b  \ndevice.k:2.name=0123456789012345678901234567890\n",
+        );
+        assert_eq!(s.arrangement.name_of(&key("k:1")), Some("a=b"));
+        assert_eq!(
+            s.arrangement.name_of(&key("k:2")),
+            Some("012345678901234567890123")
+        );
+        assert_eq!(Settings::parse(&s.encode()), s);
+    }
+
+    #[test]
+    fn device_lines_that_make_no_sense_are_ignored() {
+        let s = Settings::parse(
+            "device.nodot=1\ndevice..name=x\ndevice.k:1.color=red\ndevice.k:1.order=abc\ndevice.k:1.order=-1\ndevice.k:1.shown=maybe\ndevice.k:1.name=\n",
+        );
+        assert_eq!(s, Settings::default());
+    }
+
+    #[test]
+    fn a_key_with_a_dot_keeps_it() {
+        let s = Settings::parse("device.game-controllers:054C:0CE6.v2.name=Pad\n");
+        assert_eq!(
+            s.arrangement.name_of(&key("game-controllers:054C:0CE6.v2")),
+            Some("Pad")
+        );
+    }
+
+    #[test]
+    fn showing_a_device_again_and_the_old_hidden_line_agree() {
+        let s = Settings::parse("hidden=a:b\nhidden=c:d\ndevice.a:b.shown=1\n");
+        assert_eq!(s.hidden, vec![key("c:d")], "the later line wins");
+        // The old line still reads, and the new file names it the new way.
+        let enc = Settings::parse("hidden=a:b\n").encode();
+        assert!(enc.contains("device.a:b.shown=0\n") && !enc.contains("hidden="));
+    }
+
+    #[test]
+    fn repeated_order_numbers_keep_file_order_and_never_repeat_a_device() {
+        let s = Settings::parse(
+            "device.a:1.order=3\ndevice.b:1.order=3\ndevice.a:1.order=0\ndevice.c:1.order=9\n",
+        );
+        assert_eq!(
+            s.arrangement.order,
+            vec![key("a:1"), key("b:1"), key("c:1")]
         );
     }
 }
