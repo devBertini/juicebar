@@ -38,3 +38,19 @@ What the `logitech-hidpp` provider (`spec/PROVIDERS.md`) sends and reads. Every 
 
 ## Coexistence
 After a reconnect G HUB re-reads the whole device (dozens of requests in 200 ms). JuiceBar never repeats that: one ping, the cached feature index, one battery read at most.
+
+## Lighting (the RGB economy)
+The one device setting the provider writes besides the receiver's notification flags, and only on the app's explicit call (`Logitech::economy_on`, `economy_off`, `set_economy`) while the user's "RGB saver" switch is on. Measured on the G915 X (`docs/research/probe-windows.md`, "Lighting"; trace `spec/fixtures/windows-c547-g915x-lighting.hidtrace`).
+
+- **Shipped for the G915 X only** (catalog model with canonical id 40B5, on a receiver slot and on its cable): BrightnessControl `0x8040`. The G703 (`0x8071`, effect not readable) and the G733 (`0x8070`, every read refused) are not touched.
+- **Software ID `0x0C`**, long reports only, device index as everywhere. Not 0x0D: the general allow-list refuses every request with another software ID, so a lighting frame cannot pass as a read, and the lighting allow-list (`lighting::is_allowed`) admits only these:
+  - Root function 0 with `80 40` (getFeature of `0x8040`);
+  - on the brightness feature, function 0 `getInfo` and function 1 `getBrightness`, no parameters; function 2 `setBrightness` with exactly a big-endian 16-bit level, never above the maximum `getInfo` gave.
+  - Never: the on/off functions (3, 4), any other feature, any other function.
+- `getInfo` answer: maximum (bytes 0..1, big-endian), steps and flags, capabilities, minimum (bytes 4..5): `00 64 05 03 00 00` on the G915 X (0 to 100). `getBrightness` answer: the level in bytes 0..1 (`00 0d`, 13). The `setBrightness` answer has no payload.
+- **Apply** (`economy_on`): getFeature, getInfo, getBrightness; a level above the minimum is saved (event `Saved`, which the app keeps in its settings) and `setBrightness(minimum)` is written; a level already at the minimum is left alone and nothing is saved. Then getBrightness (event `Off`, or `Reapplied` if it is not at the minimum), and read-backs 3 s and 30 s after the write.
+- **Restore** (`economy_off`, or at start when a level was kept): getBrightness; at the minimum it is still ours, so `setBrightness(saved)` and getBrightness (events `Restored` and `Cleared`); above the minimum somebody changed it meanwhile, so nothing is written and the kept level is dropped (`Cleared`).
+- **No fighting:** a read-back that finds the level put back (G HUB, the device waking) is reported (`Reapplied`; the app says "o G HUB está reaplicando a iluminação" in the panel's footer) and never answered with a write. The economy is applied again only after a reconnect.
+- **Reconnect:** a device that comes online while the economy is wanted (or has a kept level) waits 3 s, then applies (or restores) with the same chains. A lighting request that times out marks the device offline like any other; lighting requests wait up to 4 s because a sleeping keyboard answered after 1.5 s.
+- **Quit:** the saved level is written back to every device the economy turned down, with no read-back; the level stays kept so a write that did not arrive is restored at the next start.
+- One request in flight per receiver, like every other request.

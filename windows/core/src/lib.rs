@@ -7,6 +7,7 @@ pub mod types;
 
 // Protocol side (lane W1a): spec/PROTOCOL.md, spec/PROVIDERS.md.
 pub mod hidpp;
+pub mod lighting;
 pub mod logitech;
 pub mod registry;
 

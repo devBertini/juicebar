@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 
 use juicebar_core::estimator::{self, Notice as CoreNotice, NoticeKind, Priors, Reading};
+use juicebar_core::lighting::{LightingEvent, SavedLight};
 use juicebar_core::logitech::Logitech;
 use juicebar_core::registry::{Registry, UserList};
 use juicebar_core::snapshot::{DeviceInput, DeviceView, Snapshot};
@@ -46,6 +47,17 @@ pub struct StartConfig {
     pub rgb_economy: bool,
     /// The devices the user hid in an earlier run.
     pub hidden: Vec<DeviceKey>,
+    /// The lighting levels an earlier run kept (device key, `SavedLight` text); text that does not read is dropped.
+    pub lights: Vec<(DeviceKey, String)>,
+}
+
+/// A change of the levels the app keeps in its settings for the RGB economy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LightChange {
+    /// Keep this text for the device (replacing the one kept).
+    Keep(DeviceKey, String),
+    /// The kept level is spent.
+    Drop(DeviceKey),
 }
 
 /// One entry of the "Dispositivos" menu.
@@ -70,6 +82,10 @@ pub struct Live<H: Host> {
     /// Something shown may have changed since the app last took a snapshot.
     dirty: bool,
     closed: bool,
+    /// Changes of the kept lighting levels the app has not taken yet.
+    light_changes: Vec<LightChange>,
+    /// A read-back found another program (G HUB) putting the lighting back after the economy turned it down.
+    lighting_conflict: bool,
 }
 
 /// The catalog row behind a device key (`logitech-hidpp:40B5`): the key holds the canonical product id of the
@@ -113,8 +129,22 @@ impl<H: Host> Live<H> {
             raw_notices: Vec::new(),
             dirty: true,
             closed: false,
+            light_changes: Vec::new(),
+            lighting_conflict: false,
         };
         live.note(now.mono, || "start".to_string());
+        // The economy: what an earlier run kept, then the switch as the user left it (for every device, those
+        // that appear later too).
+        let kept: Vec<(DeviceKey, SavedLight)> = cfg
+            .lights
+            .iter()
+            .filter_map(|(k, t)| Some((k.clone(), SavedLight::from_text(t)?)))
+            .collect();
+        live.provider.set_saved_lights(kept);
+        if live.rgb_economy {
+            let actions = live.provider.set_economy(true, now);
+            live.execute(actions, now);
+        }
         for (key, text) in histories {
             let priors = priors_for_key(&key);
             let name = priors.map_or_else(|| key.0.clone(), |p| p.model.to_string());
@@ -201,6 +231,12 @@ impl<H: Host> Live<H> {
         for key in &keys {
             self.rgb_of(key, &now);
         }
+        if !on {
+            self.lighting_conflict = false;
+        }
+        // The switch reaches the devices: lighting down on every online device that has it, back up on the way off.
+        let actions = self.provider.set_economy(on, now);
+        self.execute(actions, now);
         self.dirty = true;
         self.schedule_batches();
     }
@@ -242,6 +278,10 @@ impl<H: Host> Live<H> {
         }
         self.closed = true;
         self.note(now.mono, || "quit".to_string());
+        // A device the economy turned down gets its level back before the app goes; the level stays kept in case
+        // the write does not arrive.
+        let actions = self.provider.release_lights();
+        self.execute(actions, now);
         let keys: Vec<DeviceKey> = self.trackers.keys().cloned().collect();
         for key in &keys {
             self.presence_of(key, false, now.wall, &now);
@@ -253,6 +293,16 @@ impl<H: Host> Live<H> {
     }
 
     // ------------------------------------------------------------ what the app takes out
+
+    /// The changes of the kept lighting levels since the last call, for `settings.txt`.
+    pub fn take_light_changes(&mut self) -> Vec<LightChange> {
+        std::mem::take(&mut self.light_changes)
+    }
+
+    /// True while the last read-back found G HUB (or the device) putting the lighting back.
+    pub fn lighting_conflict(&self) -> bool {
+        self.lighting_conflict
+    }
 
     /// True once after anything shown may have changed.
     pub fn take_dirty(&mut self) -> bool {
@@ -320,7 +370,32 @@ impl<H: Host> Live<H> {
                 Action::Wake(at) => self.want_wake(at),
             }
         }
+        self.collect_lighting(&now);
         self.schedule_batches();
+    }
+
+    /// What the lighting driver reported since: levels to keep, and whether G HUB is putting the lighting back.
+    fn collect_lighting(&mut self, now: &Now) {
+        for event in self.provider.take_lighting_events() {
+            self.note(now.mono, || format!("lighting {event:?}"));
+            match event {
+                LightingEvent::Saved(key, saved) => {
+                    self.light_changes
+                        .push(LightChange::Keep(key, saved.to_text()));
+                }
+                LightingEvent::Cleared(key) => self.light_changes.push(LightChange::Drop(key)),
+                LightingEvent::Reapplied(..) => self.set_conflict(true),
+                LightingEvent::Off(_) | LightingEvent::Restored(_) => self.set_conflict(false),
+                LightingEvent::Failed(..) => {}
+            }
+        }
+    }
+
+    fn set_conflict(&mut self, on: bool) {
+        if self.lighting_conflict != on {
+            self.lighting_conflict = on;
+            self.dirty = true;
+        }
     }
 
     fn emit(&mut self, event: ProviderEvent, now: &Now) {
@@ -567,6 +642,7 @@ mod tests {
             lang: Lang::PtBr,
             rgb_economy: false,
             hidden: Vec::new(),
+            lights: Vec::new(),
         }
     }
 
@@ -855,6 +931,7 @@ mod tests {
     fn a_device_hidden_in_an_earlier_run_stays_hidden_when_seen() {
         let c = StartConfig {
             hidden: vec![g703()],
+            lights: Vec::new(),
             ..cfg()
         };
         let mut l = Live::start(Fake::default(), vec![], c, at(0.0));
@@ -1006,6 +1083,162 @@ mod tests {
                 .any(|s| s.contains("action appeared logitech-hidpp:4086"))
         );
         assert!(logs.iter().any(|s| s.contains("action wake 9.000")));
+    }
+
+    /// A G915 X on its cable (endpoints 1 short, 2 long), answering the way the measured one does, with the
+    /// BrightnessControl feature at index 13.
+    struct Keyboard {
+        brightness: u16,
+        writes: Vec<u16>,
+    }
+
+    impl Keyboard {
+        /// The answer to a frame the host sent, as the long collection would deliver it.
+        fn answer(&mut self, frame: &[u8]) -> Option<Vec<u8>> {
+            let (b2, b3) = (frame[2], frame[3]);
+            let function = b3 >> 4;
+            let mut a = vec![0x11, 0xFF, b2, b3];
+            match (b2, function, b3 & 0x0F) {
+                (0, 1, _) => a.extend([4, 2, 0x5A]),
+                (0, 0, _) => {
+                    let id = u16::from_be_bytes([frame[4], frame[5]]);
+                    let index = match id {
+                        0x1004 => 7,
+                        0x0005 => 3,
+                        0x8040 => 13,
+                        _ => 0,
+                    };
+                    a.extend([index, 0, 0]);
+                }
+                (3, 0, _) => a.push(4),
+                (3, 1, _) => a.extend(*b"G915"),
+                (7, 1, _) => a.extend([49, 4, 0, 0]),
+                (13, 0, 0x0C) => a.extend([0, 100, 5, 3, 0, 0]),
+                (13, 1, 0x0C) => a.extend(self.brightness.to_be_bytes()),
+                (13, 2, 0x0C) => {
+                    self.brightness = u16::from_be_bytes([frame[4], frame[5]]);
+                    self.writes.push(self.brightness);
+                }
+                _ => return None,
+            }
+            a.resize(20, 0);
+            Some(a)
+        }
+    }
+
+    /// Let the keyboard answer everything the host has sent, until it has nothing more to say.
+    fn settle(l: &mut Live<Fake>, kb: &mut Keyboard, secs: &mut f64) {
+        for _ in 0..200 {
+            let sent = std::mem::take(&mut l.host_mut().sent);
+            if sent.is_empty() {
+                return;
+            }
+            for (_, frame) in sent {
+                if let Some(answer) = kb.answer(&frame) {
+                    *secs += 0.01;
+                    l.on_event(TransportEvent::Report(2, answer), at(*secs));
+                }
+            }
+        }
+        panic!("the loop never settled");
+    }
+
+    fn keyboard_live(economy: bool, kept: Vec<(DeviceKey, String)>) -> (Live<Fake>, Keyboard, f64) {
+        let mut cfg = cfg();
+        cfg.rgb_economy = economy;
+        cfg.lights = kept;
+        let mut l = Live::start(Fake::default(), vec![], cfg, at(0.0));
+        let mut kb = Keyboard {
+            brightness: 13,
+            writes: Vec::new(),
+        };
+        let mut secs = 1.0;
+        for (id, usage, len) in [(1, 1, 7), (2, 2, 20)] {
+            l.on_event(
+                TransportEvent::Arrived(Endpoint {
+                    id,
+                    vid: 0x046D,
+                    pid: 0xC356,
+                    usage_page: 0xFF00,
+                    usage,
+                    input_len: len,
+                    output_len: len,
+                    product: String::new(),
+                    bluetooth: false,
+                }),
+                at(secs),
+            );
+        }
+        settle(&mut l, &mut kb, &mut secs);
+        (l, kb, secs)
+    }
+
+    #[test]
+    fn the_switch_turns_the_lighting_down_keeps_the_level_and_the_way_off_gives_it_back() {
+        let (mut l, mut kb, mut secs) = keyboard_live(false, vec![]);
+        assert!(kb.writes.is_empty(), "reading a battery never writes");
+        l.set_rgb_economy(true, at(secs));
+        settle(&mut l, &mut kb, &mut secs);
+        assert_eq!(kb.writes, vec![0]);
+        assert_eq!(
+            l.take_light_changes(),
+            vec![LightChange::Keep(g915(), "brightness:13".into())]
+        );
+        assert!(!l.lighting_conflict());
+        l.set_rgb_economy(false, at(secs));
+        settle(&mut l, &mut kb, &mut secs);
+        assert_eq!(kb.writes, vec![0, 13]);
+        assert_eq!(kb.brightness, 13);
+        assert_eq!(l.take_light_changes(), vec![LightChange::Drop(g915())]);
+    }
+
+    #[test]
+    fn g_hub_putting_the_lighting_back_sets_the_conflict_flag_and_the_switch_off_clears_it() {
+        let (mut l, mut kb, mut secs) = keyboard_live(false, vec![]);
+        l.set_rgb_economy(true, at(secs));
+        settle(&mut l, &mut kb, &mut secs);
+        l.take_light_changes();
+        // G HUB reapplies its lighting; the 3 s read-back finds it.
+        kb.brightness = 13;
+        secs += 3.5;
+        l.on_tick(at(secs));
+        settle(&mut l, &mut kb, &mut secs);
+        assert!(l.lighting_conflict());
+        assert!(l.take_dirty());
+        assert_eq!(kb.writes, vec![0], "no fight");
+        l.set_rgb_economy(false, at(secs));
+        settle(&mut l, &mut kb, &mut secs);
+        assert!(!l.lighting_conflict());
+        assert_eq!(
+            kb.writes,
+            vec![0],
+            "the level is not ours: nothing is written back"
+        );
+    }
+
+    #[test]
+    fn a_run_that_starts_with_the_switch_on_and_a_kept_level_does_not_keep_the_dark_level() {
+        // The last run died with the lighting down (level 13 kept, keyboard at 0); the switch is still on.
+        let (mut l, mut kb, mut secs) = keyboard_live(true, vec![(g915(), "brightness:13".into())]);
+        kb.brightness = 0;
+        secs += 4.0;
+        l.on_tick(at(secs));
+        settle(&mut l, &mut kb, &mut secs);
+        assert!(kb.writes.is_empty());
+        assert!(l.take_light_changes().is_empty());
+        l.set_rgb_economy(false, at(secs));
+        settle(&mut l, &mut kb, &mut secs);
+        assert_eq!(kb.brightness, 13);
+    }
+
+    #[test]
+    fn quitting_with_the_economy_on_writes_the_level_back_before_the_app_goes() {
+        let (mut l, mut kb, mut secs) = keyboard_live(false, vec![]);
+        l.set_rgb_economy(true, at(secs));
+        settle(&mut l, &mut kb, &mut secs);
+        l.quit(at(secs + 1.0));
+        settle(&mut l, &mut kb, &mut secs);
+        assert_eq!(kb.writes, vec![0, 13]);
     }
 
     #[test]

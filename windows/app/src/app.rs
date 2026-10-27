@@ -39,7 +39,7 @@ use juicebar_ui::system;
 
 use crate::args::Args;
 use crate::files::DataDir;
-use crate::live::{Live, StartConfig};
+use crate::live::{LightChange, Live, StartConfig};
 use crate::menu::{self, Command};
 use crate::notify::{Notice, Tracker};
 use crate::runkey;
@@ -354,6 +354,7 @@ impl App {
                 lang: self.lang,
                 rgb_economy: settings.rgb_economy,
                 hidden: settings.hidden.clone(),
+                lights: settings.lights.clone(),
             }
         };
         let live = Live::start(host, histories, cfg, winhost::core_now(self.start));
@@ -382,20 +383,40 @@ impl App {
     /// the balloons the estimators decided on.
     fn after_live(&self, force: bool) {
         let now = winhost::core_now(self.start);
-        let taken = {
+        let (changes, taken) = {
             let mut source = self.source.borrow_mut();
             let Some(live) = source.live_mut() else {
                 return;
             };
-            if live.take_dirty() || force {
+            let changes = live.take_light_changes();
+            let taken = if live.take_dirty() || force {
                 Some((live.snapshot(&now), live.take_notices(&now)))
             } else {
                 None
-            }
+            };
+            (changes, taken)
         };
+        if !changes.is_empty() {
+            self.keep_lights(changes);
+        }
         if let Some((snap, notices)) = taken {
             self.apply_with(snap, notices);
         }
+    }
+
+    /// The RGB economy's kept levels reach `settings.txt` as they change, so a run that dies with the lighting down
+    /// still knows what to give back.
+    fn keep_lights(&self, changes: Vec<LightChange>) {
+        {
+            let mut settings = self.settings.borrow_mut();
+            for change in changes {
+                match change {
+                    LightChange::Keep(key, text) => settings.keep_light(&key, text),
+                    LightChange::Drop(key) => settings.drop_light(&key),
+                }
+            }
+        }
+        self.save_settings();
     }
 
     fn save_settings(&self) {
@@ -480,13 +501,26 @@ impl App {
         let snap = self.snapshot.borrow();
         let expanded = self.expanded.borrow();
         let empty = menu::texts(self.lang, HOTKEY_TEXT).empty;
+        // The footer's right-hand text is the hotkey, except while G HUB is putting the lighting back: then it says
+        // so, instead of fighting it.
+        let conflict = self.rgb_economy.get()
+            && self
+                .source
+                .borrow()
+                .live()
+                .is_some_and(|live| live.lighting_conflict());
+        let footer_text = if conflict {
+            view::ghub_notice(self.lang).to_string()
+        } else {
+            HOTKEY_TEXT.to_string()
+        };
         view::ui_state(&ViewInput {
             snapshot: &snap,
             theme,
             accent,
             lang: self.lang,
             rgb_economy: self.rgb_economy.get(),
-            hotkey_text: HOTKEY_TEXT,
+            hotkey_text: &footer_text,
             expanded: expanded.as_ref(),
             empty_text: &empty,
             now: clock.wall,

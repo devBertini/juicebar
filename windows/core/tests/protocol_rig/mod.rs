@@ -56,6 +56,101 @@ pub struct Fake {
     pub budget: Option<usize>,
     /// Frames the provider sent that the trace has no answer for.
     pub unknown: Vec<String>,
+    /// The lighting of the device (BrightnessControl), answered by software ID 0x0C requests.
+    pub light: Option<LightFake>,
+}
+
+/// A device's BrightnessControl feature, as the G915 X answered it (`spec/PROTOCOL.md`, "Lighting").
+pub struct LightFake {
+    /// Feature index of 0x8040 (14 behind the receiver, 13 on the cable).
+    pub index: u8,
+    pub brightness: u16,
+    pub min: u16,
+    pub max: u16,
+    /// Every level the provider wrote.
+    pub writes: Vec<u16>,
+    /// Answer root getFeature(0x8040) with "not supported".
+    pub no_feature: bool,
+    /// Answer every lighting request with an error.
+    pub refuse: bool,
+    /// Stay silent to lighting requests.
+    pub silent: bool,
+    /// Every lighting request received, in order.
+    pub requests: Vec<String>,
+}
+
+impl LightFake {
+    pub fn g915x(index: u8, brightness: u16) -> LightFake {
+        LightFake {
+            index,
+            brightness,
+            min: 0,
+            max: 100,
+            writes: Vec::new(),
+            no_feature: false,
+            refuse: false,
+            silent: false,
+            requests: Vec::new(),
+        }
+    }
+
+    fn answer(&mut self, frame: &[u8]) -> Option<Vec<u8>> {
+        self.requests.push(hidpp::hex(frame));
+        if self.silent {
+            return None;
+        }
+        let (dev, b2, b3) = (frame[1], frame[2], frame[3]);
+        let function = b3 >> 4;
+        let mut a = vec![0x11, dev, b2, b3];
+        if self.refuse {
+            return Some(
+                vec![0x11, dev, 0xFF, b2, b3, 0x05]
+                    .into_iter()
+                    .chain([0; 14])
+                    .collect(),
+            );
+        }
+        if b2 == 0 && function == 0 {
+            let feature = u16::from_be_bytes([frame[4], frame[5]]);
+            let index = if feature == 0x8040 && !self.no_feature {
+                self.index
+            } else {
+                0
+            };
+            a.extend([index, 0, 0]);
+        } else if b2 == self.index {
+            match function {
+                0 => {
+                    a.extend(self.max.to_be_bytes());
+                    a.extend([5, 3]);
+                    a.extend(self.min.to_be_bytes());
+                }
+                1 => a.extend(self.brightness.to_be_bytes()),
+                2 => {
+                    self.brightness = u16::from_be_bytes([frame[4], frame[5]]);
+                    self.writes.push(self.brightness);
+                    a.extend(self.brightness.to_be_bytes());
+                }
+                _ => {
+                    return Some(
+                        vec![0x11, dev, 0xFF, b2, b3, 0x07]
+                            .into_iter()
+                            .chain([0; 14])
+                            .collect(),
+                    );
+                }
+            }
+        } else {
+            return Some(
+                vec![0x11, dev, 0xFF, b2, b3, 0x06]
+                    .into_iter()
+                    .chain([0; 14])
+                    .collect(),
+            );
+        }
+        a.resize(20, 0);
+        Some(a)
+    }
 }
 
 impl Fake {
@@ -87,6 +182,7 @@ impl Fake {
             refuse: Vec::new(),
             budget: None,
             unknown: Vec::new(),
+            light: None,
         }
     }
 
@@ -102,6 +198,10 @@ impl Fake {
             return None;
         }
         let (b2, b3) = (frame[2], frame[3]);
+        if b2 < 0x80 && b3 & 0x0F == 0x0C {
+            let a = self.light.as_mut()?.answer(frame)?;
+            return Some((self.long_ep, a));
+        }
         let answer: Vec<u8> = if b2 == 0x81 && b3 == 0x00 {
             let mut a = h("10ff810000000000");
             a.truncate(4);
@@ -207,6 +307,13 @@ impl Rig {
 
     pub fn feed(&mut self, event: TransportEvent) {
         let actions = self.core.handle(event, self.now());
+        self.process(actions);
+    }
+
+    /// Make an explicit call on the provider (the app's orders) and carry out what it asks for.
+    pub fn call(&mut self, f: impl FnOnce(&mut Logitech, Now) -> Vec<Action>) {
+        let now = self.now();
+        let actions = f(&mut self.core, now);
         self.process(actions);
     }
 
