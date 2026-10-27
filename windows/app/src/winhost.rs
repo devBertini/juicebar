@@ -15,6 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, SetTimer};
 use juicebar_core::types::{DeviceKey, Endpoint, Now, TransportEvent};
 use juicebar_hid::{StartError, Transport};
 
+use crate::calib::Calibrator;
 use crate::files::DataDir;
 use crate::live::Host;
 use crate::source::Clock;
@@ -29,6 +30,8 @@ pub struct WinHost {
     start: Instant,
     data: Option<DataDir>,
     log: Option<PathBuf>,
+    /// The battery calibration, while it runs.
+    calibrator: Option<Calibrator>,
 }
 
 impl WinHost {
@@ -47,7 +50,14 @@ impl WinHost {
             start,
             data,
             log,
+            calibrator: None,
         }
+    }
+
+    /// Takes calibration samples beside the voltage readings (`calib`).
+    pub fn with_calibrator(mut self, calibrator: Option<Calibrator>) -> WinHost {
+        self.calibrator = calibrator;
+        self
     }
 
     fn log_error(&mut self, what: &str, key: &DeviceKey, e: &std::io::Error) {
@@ -89,6 +99,12 @@ impl Host for WinHost {
         // SAFETY: a timer on our own window; the same id replaces the one armed before.
         unsafe {
             SetTimer(Some(self.hwnd), self.timer_id, delay, None);
+        }
+    }
+
+    fn calibrate(&mut self, key: &DeviceKey, millivolts: u16, charging: bool, wall: i64) {
+        if let Some(c) = &self.calibrator {
+            c.sample(&key.0, millivolts, charging, wall);
         }
     }
 

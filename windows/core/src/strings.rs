@@ -171,6 +171,7 @@ ids! {
     ABOUT_LICENSE = "about_license",
     ABOUT_LICENSE_DETAIL = "about_license_detail",
     ABOUT_PRIVACY = "about_privacy",
+    ABOUT_CALIBRATING = "about_calibrating",
     AUTOSTART_TEST_MODE = "autostart_test_mode"
 }
 

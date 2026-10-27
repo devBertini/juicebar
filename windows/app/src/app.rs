@@ -43,6 +43,7 @@ use juicebar_ui::system;
 
 use crate::anim::{self, Anim, TrayHost};
 use crate::args::Args;
+use crate::calib::{self, Calibrator};
 use crate::controllers::Controllers;
 use crate::devices::{self, Edited, Rename};
 use crate::files::DataDir;
@@ -310,10 +311,21 @@ impl App {
             None if args.is_live() => DataDir::from_env(),
             None => None,
         };
-        let settings = data
+        let mut settings = data
             .as_ref()
             .map(|d| Settings::parse(&d.read_settings()))
             .unwrap_or_default();
+        // The two weeks of battery calibration open at the first plain start of the version that has them, once.
+        if args.is_plain()
+            && let Some(d) = &data
+        {
+            let (until, fresh) =
+                calib::window_at_start(settings.calibrate_until, Clock::now().wall);
+            settings.calibrate_until = Some(until);
+            if fresh {
+                let _ = d.write_settings(&settings.encode());
+            }
+        }
         let lang = settings.language.resolve(detect_lang(args.lang.as_deref()));
         let snapshot = source.snapshot(&Clock::now(), lang, &settings);
         let mut tracker = Tracker::default();
@@ -470,7 +482,8 @@ impl App {
             self.start,
             self.data.clone(),
             self.args.log.clone(),
-        );
+        )
+        .with_calibrator(self.calibrator());
         let histories = self
             .data
             .as_ref()
@@ -490,6 +503,14 @@ impl App {
         let live = Live::start(host, histories, cfg, winhost::core_now(self.start));
         *self.source.borrow_mut() = Source::Live(Box::new(live));
         *self.pads.borrow_mut() = Some(Controllers::start(hwnd, self.msg_pads));
+    }
+
+    /// The battery calibration, while its two weeks run (plain launches only; it writes under the data folder).
+    fn calibrator(&self) -> Option<Calibrator> {
+        let until = self.settings.borrow().calibrate_until;
+        let data = self.data.as_ref().filter(|_| self.args.is_plain())?;
+        calib::is_on(until, Clock::now().wall)
+            .then(|| Calibrator::new(data.calibration_dir(), until.unwrap_or_default()))
     }
 
     /// The game-controller provider has something: its events reach the live source like the Logitech provider's.
@@ -783,7 +804,18 @@ impl App {
             devices: &devices,
             rename: rename.as_ref(),
             adjusted: self.adjusted.get(),
+            calibration_ends: self.calibration_ends(),
         })
+    }
+
+    /// `dd/mm` of the day the calibration ends, while it runs.
+    fn calibration_ends(&self) -> Option<String> {
+        let until = self.settings.borrow().calibrate_until;
+        let clock = Clock::now();
+        if !self.args.is_plain() || !calib::is_on(until, clock.wall) {
+            return None;
+        }
+        Some(calib::day_month(until?, clock.utc_offset))
     }
 
     fn ui_state(&self) -> UiState {
