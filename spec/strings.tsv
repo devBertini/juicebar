@@ -1,0 +1,60 @@
+# JuiceBar strings: every visible text, English source and Brazilian Portuguese (spec/ARCHITECTURE.md, module strings).
+# Tab separated, UTF-8, LF. Lines starting with '#' are comments; the first other line holds the column names.
+# {0}, {1}, {2} are positional values; the Mac app builds its String Catalog from this file (each {n} becomes %n$@).
+# Times are 24-hour in both languages. Percentages carry no space ("23%").
+id	en	pt-BR
+hours_min	~{0} min	~{0} min
+hours_one_hour	~1 h	~1 h
+hours_half	~{0}.5 h	~{0},5 h
+hours_whole	~{0} h	~{0} h
+days_one	~1 day	~1 dia
+days_many	~{0} days	~{0} dias
+of_use	{0} of use	{0} de uso
+label_initial	initial estimate	estimativa inicial
+eta_today	runs out today ~{0}	acaba hoje ~{0}
+eta_tomorrow	runs out tomorrow ~{0}	acaba amanhã ~{0}
+eta_weekday	runs out {0} ~{1}	acaba {0} ~{1}
+wd_0	Mon	seg
+wd_1	Tue	ter
+wd_2	Wed	qua
+wd_3	Thu	qui
+wd_4	Fri	sex
+wd_5	Sat	sáb
+wd_6	Sun	dom
+full_in_min	full in ~{0} min	cheio em ~{0} min
+full_in_h	full in ~{0} h	cheio em ~{0} h
+full_in_hmin	full in ~{0} h {1} min	cheio em ~{0} h {1} min
+full_at	full at {0}	cheio às {0}
+usage_min	{0} min	{0} min
+usage_h	{0} h	{0} h
+usage_hmin	{0} h {1} min	{0} h {1} min
+usage_today	Today: {0} of use	Hoje: {0} de uso
+health_learning	learning	aprendendo
+health_percent	{0}%	{0}%
+health_line	Battery health: {0}	Saúde da bateria: {0}
+smart_warning	Won't last the day: charge before {0}:00	Não chega ao fim do dia: carregue antes das {0}h
+low_warning	{0} at {1}%	{0} com {1}%
+notice_full_title	{0}: battery full	{0}: bateria cheia
+notice_full_body	you can unplug it	pode tirar do cabo
+conn_receiver	Receiver	Receptor
+conn_dongle	Dongle	Dongle
+conn_bluetooth	Bluetooth	Bluetooth
+conn_usb	USB cable	Cabo USB
+status_charging	charging	carregando
+status_full	full	cheio
+status_no_reading	no reading yet	sem leitura
+status_off	off	desligado
+status_off_at	off · {0}% at {1}	desligado · {0}% às {1}
+coarse_full	battery full	bateria cheia
+coarse_good	battery good	bateria boa
+coarse_low	battery low	bateria baixa
+coarse_critical	battery critical	bateria crítica
+section_off	Off	Desligados
+panel_title	JuiceBar	JuiceBar
+panel_on_count	{0} on	{0} ligados
+rgb_saver	RGB saver	Economia de RGB
+tooltip_line	{0} {1}%	{0} {1}%
+tooltip_line_status	{0} {1}% · {2}	{0} {1}% · {2}
+tooltip_off	{0} · off	{0} · desligado
+tooltip_empty	JuiceBar: no devices	JuiceBar: nenhum dispositivo
+tooltip_plain	{0} · {1}	{0} · {1}
