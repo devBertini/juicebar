@@ -21,6 +21,10 @@ pub struct Args {
     pub data: Option<PathBuf>,
     /// Show the empty "no devices yet" state and read no device (captures).
     pub empty: bool,
+    /// Play the tray mark's animation every this many seconds instead of its own pace (tests).
+    pub anim_every: Option<u32>,
+    /// Do not register the Ctrl+Alt+B hotkey (a test instance beside the owner's own).
+    pub no_hotkey: bool,
 }
 
 impl Args {
@@ -45,6 +49,8 @@ impl Args {
                 "--log" => a.log = it.next().map(PathBuf::from),
                 "--data" => a.data = it.next().map(PathBuf::from),
                 "--empty" => a.empty = true,
+                "--anim-every" => a.anim_every = it.next().and_then(|v| v.parse().ok()),
+                "--no-hotkey" => a.no_hotkey = true,
                 _ => {}
             }
         }
@@ -81,6 +87,17 @@ mod tests {
         assert!(!parse("--demo").is_live());
         assert!(!parse("--empty").is_live());
         assert!(parse("").log.is_none());
+    }
+
+    #[test]
+    fn the_test_flags_for_the_animation_and_the_hotkey_parse() {
+        let a = parse("--demo --anim-every 60 --no-hotkey");
+        assert_eq!(a.anim_every, Some(60));
+        assert!(a.no_hotkey);
+        let plain = parse("--demo");
+        assert_eq!(plain.anim_every, None);
+        assert!(!plain.no_hotkey);
+        assert_eq!(parse("--anim-every soon").anim_every, None);
     }
 
     #[test]

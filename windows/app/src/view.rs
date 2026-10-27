@@ -5,6 +5,7 @@ use juicebar_core::estimator::LOW_PERCENT;
 use juicebar_core::snapshot::{self, DeviceView, Snapshot};
 use juicebar_core::strings::{self, Lang, id};
 use juicebar_core::types::{DeviceKey, Kind};
+use juicebar_ui::icon::{IconLook, Juice};
 use juicebar_ui::model::{Glyph, IconState, Rgb, Theme, UiDevice, UiLabels, UiState};
 
 /// Everything besides the snapshot that the flyout depends on.
@@ -41,11 +42,26 @@ pub fn glyph_for(kind: Kind) -> Glyph {
     }
 }
 
-pub fn icon_state(s: snapshot::IconState) -> IconState {
-    match s {
-        snapshot::IconState::Normal => IconState::Normal,
-        snapshot::IconState::Warning => IconState::Warning,
-        snapshot::IconState::Charging => IconState::Charging,
+/// The tray mark's look for the core's.
+pub fn icon_look(l: snapshot::IconLook) -> IconLook {
+    IconLook {
+        juice: match l.juice {
+            snapshot::Juice::Green => Juice::Green,
+            snapshot::Juice::Purple => Juice::Purple,
+            snapshot::Juice::Red => Juice::Red,
+        },
+        charging: l.charging,
+    }
+}
+
+/// The flyout's alert state for the core's look (a red juice is the warning).
+pub fn icon_state(l: snapshot::IconLook) -> IconState {
+    if l.juice == snapshot::Juice::Red {
+        IconState::Warning
+    } else if l.charging {
+        IconState::Charging
+    } else {
+        IconState::Normal
     }
 }
 
@@ -270,6 +286,41 @@ mod tests {
         let xbox = ui.devices.iter().find(|d| d.name.contains("Xbox")).unwrap();
         assert_eq!(xbox.glyph, Glyph::Gamepad);
         assert_eq!(xbox.health, None, "learning health has no percent");
+    }
+
+    #[test]
+    fn the_core_look_maps_to_the_marks_look_and_the_flyouts_alert() {
+        let core = |juice, charging| snapshot::IconLook { juice, charging };
+        let red = core(snapshot::Juice::Red, true);
+        assert_eq!(
+            icon_look(red),
+            IconLook {
+                juice: Juice::Red,
+                charging: true
+            }
+        );
+        assert_eq!(
+            icon_look(core(snapshot::Juice::Green, false)),
+            IconLook {
+                juice: Juice::Green,
+                charging: false
+            }
+        );
+        assert_eq!(
+            icon_look(core(snapshot::Juice::Purple, false)).juice,
+            Juice::Purple
+        );
+        // Red is the warning, even while charging; charging shows otherwise; the rest is normal.
+        assert_eq!(icon_state(red), IconState::Warning);
+        assert_eq!(
+            icon_state(core(snapshot::Juice::Green, true)),
+            IconState::Charging
+        );
+        assert_eq!(
+            icon_state(core(snapshot::Juice::Green, false)),
+            IconState::Normal
+        );
+        assert_eq!(icon_state(snapshot::IconLook::default()), IconState::Normal);
     }
 
     #[test]
