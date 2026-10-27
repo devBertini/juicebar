@@ -397,11 +397,28 @@ pub fn sample_settings_page() -> UiSettings {
                 ],
             ),
             SettingsSection::new(
+                "Dispositivos",
+                vec![
+                    SettingsRow::device(17, "G703", Glyph::Mouse, true, (false, true))
+                        .with_detail("Receptor"),
+                    SettingsRow::device(18, "G915 X", Glyph::Keyboard, true, (true, true))
+                        .with_detail("Receptor"),
+                    SettingsRow::device(19, "G733", Glyph::Headset, false, (true, true))
+                        .with_detail("Dongle · oculto"),
+                    SettingsRow::device(20, "Xbox Controller", Glyph::Gamepad, true, (true, false))
+                        .with_detail("Bluetooth"),
+                    SettingsRow::note(
+                        21,
+                        "Chave: mostrar no painel. Lápis: renomear. Setas: mudar a ordem.",
+                    ),
+                ],
+            ),
+            SettingsSection::new(
                 "Geral",
                 vec![
                     SettingsRow::toggle(10, "Iniciar com o Windows", true),
                     SettingsRow::choice(11, "Idioma", &["Automático", "Português", "English"], 0),
-                    SettingsRow::value(12, "Atalho", "Ctrl+Alt+B")
+                    SettingsRow::link(12, "Atalho: Ctrl+Alt+B", "Alterar")
                         .with_detail("Abre o JuiceBar de qualquer lugar"),
                 ],
             ),

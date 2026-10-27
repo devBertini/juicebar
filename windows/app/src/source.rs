@@ -4,12 +4,13 @@
 //! devices of `docs/design/harness/sample-state.js` (hand-ported), or "no devices yet".
 
 use juicebar_core::snapshot::{
-    ChartPoint, DeviceView, Forecast, IconLook, Limits, Snapshot, tooltip,
+    Arrangement, ChartPoint, DeviceView, Forecast, IconLook, Limits, Snapshot, tooltip,
 };
 use juicebar_core::strings::{self, Lang, id};
 use juicebar_core::types::{DeviceKey, Kind, Now};
 
-use crate::live::Live;
+use crate::live::{DeviceChoice, Live};
+use crate::settings::Settings;
 use crate::winhost::WinHost;
 
 /// Wall time and the local offset, both read by the shell and passed in (the core never reads a clock).
@@ -92,16 +93,52 @@ pub enum Source {
 }
 
 impl Source {
-    /// The snapshot now; a live source already holds the user's limits, the demo takes them here.
-    pub fn snapshot(&self, clock: &Clock, lang: Lang, limits: Limits) -> Snapshot {
+    /// The snapshot now; a live source already holds the user's choices, the demo takes them from `user`.
+    pub fn snapshot(&self, clock: &Clock, lang: Lang, user: &Settings) -> Snapshot {
         match self {
             Source::Empty => empty_snapshot(lang),
-            Source::Demo { phase, .. } => demo_snapshot_with(*phase, clock, lang, limits),
+            Source::Demo { phase, .. } => demo_snapshot_for(
+                *phase,
+                clock,
+                lang,
+                user.limits(),
+                &user.hidden,
+                &user.arrangement,
+            ),
             Source::Live(live) => live.snapshot(&Now {
                 wall: clock.wall as f64,
                 mono: 0.0,
                 utc_offset: clock.utc_offset,
             }),
+        }
+    }
+
+    /// Every device the Dispositivos section lists, in the order the user sees them.
+    pub fn devices(&self, clock: &Clock, lang: Lang, user: &Settings) -> Vec<DeviceChoice> {
+        match self {
+            Source::Empty => Vec::new(),
+            Source::Demo { phase, .. } => {
+                let all = demo_snapshot_with(*phase, clock, lang, Limits::default());
+                let mut out: Vec<DeviceChoice> = all
+                    .devices
+                    .iter()
+                    .map(|d| DeviceChoice {
+                        key: d.key.clone(),
+                        name: user
+                            .arrangement
+                            .name_of(&d.key)
+                            .map_or_else(|| d.name.clone(), str::to_string),
+                        default_name: d.name.clone(),
+                        kind: Some(d.kind),
+                        connection: d.connection.clone(),
+                        shown: !user.hidden.contains(&d.key),
+                        on: d.on,
+                    })
+                    .collect();
+                out.sort_by_cached_key(|d| user.arrangement.sort_key(&d.key, d.on, &d.name));
+                out
+            }
+            Source::Live(live) => live.devices(),
         }
     }
 
@@ -353,6 +390,19 @@ pub fn demo_snapshot(phase: DemoPhase, clock: &Clock, lang: Lang) -> Snapshot {
 
 /// `demo_snapshot` with the icon's limits as the user set them.
 pub fn demo_snapshot_with(phase: DemoPhase, clock: &Clock, lang: Lang, limits: Limits) -> Snapshot {
+    demo_snapshot_for(phase, clock, lang, limits, &[], &Arrangement::default())
+}
+
+/// `demo_snapshot_with` as the user arranged it: the hidden devices left out (the icon's color and the tooltip
+/// follow), the names and the order applied.
+pub fn demo_snapshot_for(
+    phase: DemoPhase,
+    clock: &Clock,
+    lang: Lang,
+    limits: Limits,
+    hidden: &[DeviceKey],
+    arrangement: &Arrangement,
+) -> Snapshot {
     let warn = matches!(phase, DemoPhase::Scene | DemoPhase::Warning);
     let charge = matches!(phase, DemoPhase::Scene | DemoPhase::Charging);
 
@@ -384,6 +434,7 @@ pub fn demo_snapshot_with(phase: DemoPhase, clock: &Clock, lang: Lang, limits: L
     forecast(&mut pad, clock, 54.5);
 
     let mut devices = vec![mouse, keys, headset, pad];
+    devices.retain(|d| !hidden.contains(&d.key));
     // The core's order: devices that are on first, then by name.
     devices.sort_by(|a, b| {
         (!a.on, a.name.to_lowercase(), &a.key).cmp(&(!b.on, b.name.to_lowercase(), &b.key))
@@ -397,6 +448,7 @@ pub fn demo_snapshot_with(phase: DemoPhase, clock: &Clock, lang: Lang, limits: L
         on_count: devices.iter().filter(|d| d.on).count(),
         devices,
     }
+    .arranged(arrangement, lang)
 }
 
 #[cfg(test)]
@@ -440,12 +492,112 @@ mod tests {
             phase: DemoPhase::Normal,
             cycle: false,
         };
+        let user = Settings {
+            red_below: 30,
+            green_above: 60,
+            ..Settings::default()
+        };
         assert_eq!(
-            s.snapshot(&CLOCK, Lang::PtBr, Limits::new(5, 20))
-                .icon
-                .juice,
-            Juice::Green
+            s.snapshot(&CLOCK, Lang::PtBr, &user).icon.juice,
+            Juice::Red,
+            "23 is under the user's 30"
         );
+    }
+
+    fn key(k: &str) -> DeviceKey {
+        DeviceKey(k.to_string())
+    }
+
+    #[test]
+    fn a_hidden_demo_device_leaves_the_panel_the_tooltip_and_the_icons_color() {
+        // The normal scene: G703 23 % (under the 25 % red limit), G915 X 46 %, Xbox 64 %, the G733 off.
+        let all = demo_snapshot(DemoPhase::Normal, &CLOCK, Lang::PtBr);
+        let user = Settings {
+            red_below: 25,
+            green_above: 30,
+            ..Settings::default()
+        };
+        let at = |hidden: &[DeviceKey]| {
+            demo_snapshot_for(
+                DemoPhase::Normal,
+                &CLOCK,
+                Lang::PtBr,
+                user.limits(),
+                hidden,
+                &Arrangement::default(),
+            )
+        };
+        let with = at(&[]);
+        assert_eq!(with.devices.len(), all.devices.len());
+        assert_eq!(with.icon.juice, Juice::Red, "the G703 at 23 % is under 25");
+        let without = at(&[key("demo-g703")]);
+        assert_eq!(without.devices.len(), all.devices.len() - 1);
+        assert!(without.devices.iter().all(|d| d.name != "G703"));
+        assert!(!without.tooltip.contains("G703"), "{}", without.tooltip);
+        assert_eq!(
+            without.icon.juice,
+            Juice::Green,
+            "without it every device is over 30 %"
+        );
+        assert_eq!(without.on_count, with.on_count - 1);
+    }
+
+    #[test]
+    fn the_demo_follows_the_users_names_and_order() {
+        let mut user = Settings::default();
+        user.arrangement
+            .set_name(&key("demo-g915x"), "Teclado da mesa");
+        user.arrangement.order = vec![key("demo-xbox"), key("demo-g915x")];
+        let s = Source::Demo {
+            phase: DemoPhase::Normal,
+            cycle: false,
+        };
+        let snap = s.snapshot(&CLOCK, Lang::PtBr, &user);
+        let names: Vec<&str> = snap.devices.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Xbox Controller", "Teclado da mesa", "G703", "G733"]
+        );
+        assert!(
+            snap.tooltip.starts_with("Xbox Controller"),
+            "{}",
+            snap.tooltip
+        );
+        assert!(
+            snap.tooltip.contains("Teclado da mesa 46%"),
+            "{}",
+            snap.tooltip
+        );
+    }
+
+    #[test]
+    fn the_device_list_keeps_hidden_devices_and_follows_names_and_order() {
+        let mut user = Settings {
+            hidden: vec![key("demo-g733")],
+            ..Settings::default()
+        };
+        user.arrangement.set_name(&key("demo-g703"), "Mouse");
+        user.arrangement.order = vec![key("demo-g733")];
+        let s = Source::Demo {
+            phase: DemoPhase::Normal,
+            cycle: false,
+        };
+        let list = s.devices(&CLOCK, Lang::PtBr, &user);
+        let seen: Vec<(&str, bool)> = list.iter().map(|d| (d.name.as_str(), d.shown)).collect();
+        assert_eq!(
+            seen,
+            [
+                ("G733", false),
+                ("G915 X", true),
+                ("Mouse", true),
+                ("Xbox Controller", true)
+            ]
+        );
+        let mouse = list.iter().find(|d| d.key == key("demo-g703")).unwrap();
+        assert_eq!(mouse.default_name, "G703");
+        assert_eq!(mouse.kind, Some(Kind::Mouse));
+        assert_eq!(mouse.connection, "Receptor");
+        assert!(Source::Empty.devices(&CLOCK, Lang::PtBr, &user).is_empty());
     }
 
     #[test]

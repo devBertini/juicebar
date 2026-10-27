@@ -30,16 +30,17 @@ use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_BACK, VK_DOWN, VK_ESCAPE, VK_LEFT,
-    VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+    GetKeyState, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_BACK, VK_CONTROL, VK_DOWN,
+    VK_ESCAPE, VK_LEFT, VK_LWIN, VK_MENU, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB,
+    VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetCursorPos,
     GetWindowLongPtrW, IDC_ARROW, IsWindow, LoadCursorW, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE,
     SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_INACTIVE,
     WM_ACTIVATE, WM_CHAR, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP,
+    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SYSCHAR, WM_SYSKEYDOWN, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Error, PCWSTR, Result, w};
 
@@ -49,7 +50,7 @@ use crate::layout::{
     EDGE_MARGIN, FlyoutHit, Layout, Metrics, PxRect, place, scale_from_dpi, size_px,
 };
 use crate::model::{Theme, UiState};
-use crate::settings::{EditKey, NavKey};
+use crate::settings::{Chord, EditKey, NavKey};
 use crate::settings_layout::WHEEL_STEP;
 
 /// Callbacks of a shown flyout. Both run on the UI thread, inside the window's message handling;
@@ -598,15 +599,16 @@ impl Inner {
 
     /// A key pressed while the flyout has the focus.
     fn key_down(&self, vk: u16) -> Key {
-        let (page, editing) = {
+        let (page, editing, capturing) = {
             let st = self.state.borrow();
             (
                 st.settings.is_some(),
                 st.settings.as_ref().is_some_and(|s| s.editing()),
+                st.settings.as_ref().is_some_and(|s| s.capturing),
             )
         };
         if vk == VK_ESCAPE.0 {
-            return if editing {
+            return if editing || capturing {
                 Key::Hit(FlyoutHit::Edit(EditKey::Escape))
             } else if page {
                 Key::Hit(FlyoutHit::Back)
@@ -616,6 +618,14 @@ impl Inner {
         }
         if !page {
             return Key::Pass;
+        }
+        if capturing {
+            // SAFETY: plain key-state queries.
+            let down = |k: u16| unsafe { GetKeyState(i32::from(k)) } < 0;
+            return match chord_of(vk, down) {
+                Some(chord) => Key::Hit(FlyoutHit::Chord(chord)),
+                None => Key::Handled,
+            };
         }
         if editing {
             return match vk {
@@ -689,6 +699,29 @@ impl Inner {
     }
 }
 
+/// The combination a key press makes, given how to ask whether a virtual key is held; `None` for a press of a
+/// modifier key alone (the combination is not finished).
+pub fn chord_of(vk: u16, down: impl Fn(u16) -> bool) -> Option<Chord> {
+    // Shift, Control, Menu (Alt), the left and right variants of each, and the two Windows keys.
+    if matches!(vk, 0x10..=0x12 | 0xA0..=0xA5) || vk == VK_LWIN.0 || vk == VK_RWIN.0 {
+        return None;
+    }
+    let mut mods = 0;
+    if down(VK_CONTROL.0) {
+        mods |= Chord::CONTROL;
+    }
+    if down(VK_MENU.0) {
+        mods |= Chord::ALT;
+    }
+    if down(VK_SHIFT.0) {
+        mods |= Chord::SHIFT;
+    }
+    if down(VK_LWIN.0) || down(VK_RWIN.0) {
+        mods |= Chord::WIN;
+    }
+    Some(Chord { vk, mods })
+}
+
 /// What a key press does to the flyout.
 enum Key {
     /// Destroy the window (Esc on the list).
@@ -750,6 +783,30 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             Key::Handled => return LRESULT(0),
             Key::Pass => {}
         },
+        // Alt held: the system sends a "system" key. It is ours only while a combination is awaited.
+        WM_SYSKEYDOWN
+            if inner
+                .state
+                .borrow()
+                .settings
+                .as_ref()
+                .is_some_and(|s| s.capturing) =>
+        {
+            if let Key::Hit(hit) = inner.key_down(wparam.0 as u16) {
+                inner.emit(hit);
+            }
+            return LRESULT(0);
+        }
+        WM_SYSCHAR
+            if inner
+                .state
+                .borrow()
+                .settings
+                .as_ref()
+                .is_some_and(|s| s.capturing) =>
+        {
+            return LRESULT(0);
+        }
         WM_CHAR => {
             let editing = inner
                 .state
@@ -1169,5 +1226,32 @@ mod tests {
                 && r.bottom <= work.bottom,
             "{r:?} outside {work:?}"
         );
+    }
+
+    #[test]
+    fn a_pressed_key_with_the_held_modifiers_makes_a_chord_and_a_modifier_alone_makes_none() {
+        let held = |keys: &'static [u16]| move |k: u16| keys.contains(&k);
+        let b = u16::from(b'B');
+        assert_eq!(
+            chord_of(b, held(&[VK_CONTROL.0, VK_MENU.0])),
+            Some(Chord {
+                vk: b,
+                mods: Chord::CONTROL | Chord::ALT
+            })
+        );
+        assert_eq!(
+            chord_of(0x7A, held(&[VK_RWIN.0, VK_SHIFT.0])),
+            Some(Chord {
+                vk: 0x7A,
+                mods: Chord::WIN | Chord::SHIFT
+            })
+        );
+        assert_eq!(chord_of(b, held(&[])), Some(Chord { vk: b, mods: 0 }));
+        // Shift, Control, Alt (and their left and right keys) and the Windows keys are not the end of a combination.
+        for vk in [
+            0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C,
+        ] {
+            assert_eq!(chord_of(vk, held(&[VK_CONTROL.0])), None, "{vk:#x}");
+        }
     }
 }

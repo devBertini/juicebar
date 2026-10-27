@@ -12,15 +12,19 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::core::Result;
 
-use crate::draw::{Palette, paint_switch};
+use crate::draw::{Palette, draw_glyph, paint_switch};
 use crate::gfx::{Align, Canvas, Gfx, IDENTITY, scale_translate};
+use crate::glyphs;
 use crate::icon::{self, Frame, IconLook, Juice};
 use crate::layout::{FlyoutHit, Rect, WIDTH};
 use crate::model::UiState;
-use crate::settings::{PART_MINUS, PART_PLUS, PART_SEGMENT, RowKind, SettingsRow, UiSettings};
+use crate::settings::{
+    PART_DOWN, PART_MINUS, PART_PLUS, PART_RENAME, PART_SEGMENT, PART_SHOW, PART_UP, RowKind,
+    SettingsRow, UiSettings,
+};
 use crate::settings_layout::{
     self, ARROW, CARD_W, RowMeasure, STEPPER_GAP, STEPPER_VALUE_W, SettingsGeom, SettingsMetrics,
-    SettingsRowGeom, identity_parts,
+    SettingsRowGeom, device_buttons, device_glyph, identity_parts,
 };
 
 struct SFonts {
@@ -75,7 +79,7 @@ pub fn measure_settings(g: &Gfx, ui: &UiSettings) -> Result<SettingsMetrics> {
         if let Some(e) = err.into_inner() {
             return Err(e);
         }
-        let lw = settings_layout::label_width(control_w);
+        let lw = settings_layout::label_width_of(&r.kind, control_w);
         let (label_h, detail_h) = if matches!(r.kind, RowKind::Identity { .. }) {
             (0.0, 0.0)
         } else {
@@ -241,8 +245,11 @@ fn paint_row(
     }
     let quiet = if row.enabled { 1.0 } else { 0.45 };
     let note = matches!(row.kind, RowKind::Note);
+    let hidden_device = matches!(row.kind, RowKind::Device { shown: false, .. });
     let (font, color) = if note {
         (&f.note, p.fg2)
+    } else if hidden_device {
+        (&f.label, p.fg2)
     } else {
         (&f.label, p.fg.fade(quiet))
     };
@@ -360,6 +367,7 @@ fn paint_row(
             value,
             placeholder,
             editing,
+            selected,
         } => {
             c.fill_rrect(ctl, 6.0, p.tile);
             let edge = if *editing || focused {
@@ -369,15 +377,109 @@ fn paint_row(
             };
             c.stroke_rrect(ctl, 6.0, if *editing { 1.5 } else { c.hairline() }, edge);
             let inner = Rect::new(ctl.x + 9.0, ctl.y, ctl.w - 18.0, ctl.h);
-            if value.is_empty() && !*editing {
-                c.text_in(placeholder, &f.control, inner, Align::Left, p.fg3)?;
+            let text_w = c.measure(value, &f.control)?.0;
+            // A name wider than the field shows its end, where the caret is.
+            let over = text_w > inner.w - 2.0;
+            let at = if over {
+                Rect::new(inner.right() - text_w - 2.0, inner.y, text_w + 4.0, inner.h)
             } else {
-                c.text_in(value, &f.control, inner, Align::Left, p.fg)?;
+                inner
+            };
+            if over {
+                c.push_clip(inner);
             }
-            if *editing {
-                let w = c.measure(value, &f.control)?.0.min(inner.w - 2.0);
-                let x = inner.x + w + 1.0;
+            let drawn = (|| -> Result<()> {
+                if value.is_empty() {
+                    c.text_in(placeholder, &f.control, inner, Align::Left, p.fg3)?;
+                } else if *editing && *selected {
+                    // The whole text is selected: a highlight behind it, the text on the accent.
+                    let w = text_w.min(inner.w);
+                    let hl = Rect::new(inner.x - 2.0, ctl.y + 4.0, w + 4.0, ctl.h - 8.0);
+                    c.fill_rrect(hl, 3.0, p.accent);
+                    c.text_in(value, &f.control, at, Align::Left, p.on(p.accent))?;
+                } else {
+                    c.text_in(value, &f.control, at, Align::Left, p.fg)?;
+                }
+                Ok(())
+            })();
+            if over {
+                c.pop_clip();
+            }
+            drawn?;
+            if *editing && !*selected {
+                let x = if over {
+                    inner.right() + 1.0
+                } else {
+                    inner.x + text_w + 1.0
+                };
                 c.line((x, ctl.y + 6.0), (x, ctl.bottom() - 6.0), 1.2, p.fg, None);
+            }
+        }
+        RowKind::Device {
+            glyph,
+            shown,
+            can_up,
+            can_down,
+        } => {
+            let ink = if *shown { p.fg } else { p.fg3 };
+            let gr = device_glyph(b);
+            draw_glyph(c, *glyph, gr, ink, false, glyphs::STROKE)?;
+            let (show, rename, up, down) = device_buttons(ctl);
+            for (btn, part, usable) in [
+                (rename, PART_RENAME, true),
+                (up, PART_UP, *can_up),
+                (down, PART_DOWN, *can_down),
+            ] {
+                c.fill_rrect(btn, 6.0, p.tile.fade(quiet));
+                c.stroke_rrect(btn, 6.0, c.hairline(), p.card_edge);
+                if hovered == Some(part) && usable {
+                    c.fill_rrect(btn, 6.0, p.hover);
+                }
+                let col = if usable { p.fg } else { p.fg3 };
+                let (bx, by) = (btn.x + btn.w / 2.0, btn.cy());
+                match part {
+                    PART_RENAME => {
+                        // A pencil: its outline on the diagonal, the tip at the lower left.
+                        let body = c.polyline(
+                            &[
+                                (bx - 5.5, by + 5.5),
+                                (bx - 4.5, by + 1.5),
+                                (bx + 2.5, by - 5.5),
+                                (bx + 5.5, by - 2.5),
+                                (bx - 1.5, by + 4.5),
+                            ],
+                            true,
+                            false,
+                        )?;
+                        c.stroke_geometry(&body.into(), 1.4, col, None);
+                        c.line((bx + 0.5, by - 3.5), (bx + 3.5, by - 0.5), 1.2, col, None);
+                    }
+                    _ => {
+                        let d = if part == PART_UP { -1.0 } else { 1.0 };
+                        let head = c.polyline(
+                            &[
+                                (bx - 4.5, by - d * 2.0),
+                                (bx, by + d * 2.5),
+                                (bx + 4.5, by - d * 2.0),
+                            ],
+                            false,
+                            false,
+                        )?;
+                        c.stroke_geometry(&head.into(), 1.6, col, None);
+                    }
+                }
+            }
+            paint_switch(c, p, show, *shown, quiet);
+            if hovered == Some(PART_SHOW) {
+                c.stroke_rrect(inflate(show, 2.0), 12.0, c.hairline(), p.fg3);
+            }
+            if focused {
+                c.stroke_rrect(
+                    Rect::new(b.x + 2.0, b.y + 2.0, b.w - 4.0, b.h - 4.0),
+                    6.0,
+                    2.0,
+                    p.accent,
+                );
             }
         }
         RowKind::Identity { .. } | RowKind::Note => {}
@@ -472,7 +574,7 @@ mod tests {
                 );
                 let w = g.measure(&r.label, &f.label).unwrap().0;
                 assert!(
-                    w <= settings_layout::label_width(mr.control_w),
+                    w <= settings_layout::label_width_of(&r.kind, mr.control_w),
                     "{}",
                     r.label
                 );

@@ -6,7 +6,7 @@
 //! every device on its own glass card and the first-open welcome page.
 
 use crate::model::UiState;
-use crate::settings::{EditKey, RowId};
+use crate::settings::{Chord, EditKey, RowId};
 use crate::settings_layout::{self, SettingsGeom, SettingsHit, SettingsMetrics};
 
 /// A rectangle in DIPs.
@@ -56,6 +56,8 @@ pub enum FlyoutHit {
     },
     /// A key typed into a text field of the Settings page that is being edited.
     Edit(EditKey),
+    /// A key combination typed while the Settings page waits for one (Esc arrives as `Edit(Escape)`).
+    Chord(Chord),
     None,
 }
 

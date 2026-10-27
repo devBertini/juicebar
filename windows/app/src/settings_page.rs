@@ -3,18 +3,25 @@
 //! The Settings page's content: which sections and rows the flyout shows for the user's settings, and what a
 //! click or key on a row asks the app to do. Pure: no Win32, so it is unit tested.
 //!
-//! To add a section (the devices, for one), build its rows with new ids in `build` and map their hits in
-//! `action`; the flyout's drawing, layout, keyboard and scrolling need nothing.
+//! To add a section, build its rows with new ids in `build` and map their hits in `action`; the flyout's drawing,
+//! layout, keyboard and scrolling need nothing. The Dispositivos section has one row per device, with ids from
+//! `row::DEVICE_BASE` up that the app hands out (a device keeps its id for the whole run).
 
 use juicebar_core::strings::{self, Lang, id};
+use juicebar_ui::model::Glyph;
 use juicebar_ui::settings::{
-    PART_ROW, RowId, RowKind, SettingsRow, SettingsSection, UiSettings, segment_of, stepped,
+    PART_DOWN, PART_RENAME, PART_ROW, PART_SHOW, PART_UP, RowId, RowKind, SettingsRow,
+    SettingsSection, UiSettings, segment_of, stepped,
 };
 
+use crate::devices::Rename;
+use crate::hotkey::Hotkey;
+use crate::live::DeviceChoice;
 use crate::settings::{
     Adjusted, GREEN_MAX, GREEN_MIN, LangChoice, RED_MAX, RED_MIN, Settings, ThemeChoice, WARN_MAX,
     WARN_MIN,
 };
+use crate::view::glyph_for;
 
 /// The id of every row (the flyout hands them back in a hit).
 pub mod row {
@@ -36,11 +43,35 @@ pub mod row {
     pub const GITHUB: RowId = 14;
     pub const LICENSE: RowId = 15;
     pub const PRIVACY: RowId = 16;
+    pub const HOTKEY_RESET: RowId = 17;
+    pub const DEVICES_NOTE: RowId = 18;
+    /// The first id of the device rows.
+    pub const DEVICE_BASE: RowId = 100;
 }
 
 pub const GITHUB_URL: &str = "https://github.com/devBertini/juicebar";
 pub const LICENSE_URL: &str = "https://www.gnu.org/licenses/gpl-3.0.html";
 pub const TRANSPARENCY_URL: &str = "ms-settings:personalization-colors";
+
+/// Where the shortcut's row stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum HotkeyState {
+    #[default]
+    Idle,
+    /// The page waits for the next key combination.
+    Capturing,
+    /// The page still waits: the last combination cannot be a shortcut (too few modifiers) and the row says why.
+    Refused,
+    /// The last combination was taken by another program.
+    InUse,
+}
+
+impl HotkeyState {
+    /// The page is waiting for a key combination.
+    pub fn waits(self) -> bool {
+        matches!(self, HotkeyState::Capturing | HotkeyState::Refused)
+    }
+}
 
 /// Everything the page depends on.
 pub struct PageInput<'a> {
@@ -50,8 +81,13 @@ pub struct PageInput<'a> {
     pub autostart: bool,
     /// Windows' "Transparency effects" are on.
     pub transparency: bool,
-    pub hotkey: &'a str,
+    pub hotkey: Hotkey,
     pub hotkey_ok: bool,
+    pub hotkey_state: HotkeyState,
+    /// Every known device with its row id, in the order the user sees them.
+    pub devices: &'a [(RowId, DeviceChoice)],
+    /// The rename in progress, if any.
+    pub rename: Option<&'a Rename>,
     /// The limit that the last change of the other one moved; its row says so.
     pub adjusted: Option<Adjusted>,
 }
@@ -69,8 +105,25 @@ pub enum Change {
     DoNotDisturb(bool),
     Autostart(bool),
     Language(LangChoice),
+    /// A control of a device row (the id is the row's).
+    Device(RowId, DeviceOp),
+    /// The shortcut's "Alterar": wait for the next key combination (again: stop waiting).
+    HotkeyCapture,
+    /// Back to Ctrl+Alt+B.
+    HotkeyReset,
     /// Open a web page or a Windows settings page.
     Open(&'static str),
+}
+
+/// What a device row's control asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceOp {
+    /// Show (true) or hide the device in the panel, the tooltip and the icon's color.
+    Show(bool),
+    /// Turn the row into a text field.
+    Rename,
+    Up,
+    Down,
 }
 
 fn percent(v: u8) -> String {
@@ -124,13 +177,56 @@ pub fn build(i: &PageInput<'_>) -> UiSettings {
         None => {}
     }
 
-    let hotkey_detail = if i.hotkey_ok {
-        t(id::SET_HOTKEY_DETAIL).to_string()
-    } else {
-        strings::fmt(lang, id::MENU_HOTKEY_UNAVAILABLE, &[i.hotkey])
+    let hotkey_text = i.hotkey.text();
+    let (hotkey_action, hotkey_detail) = match i.hotkey_state {
+        HotkeyState::Capturing => (
+            t(id::SET_WAITING).to_string(),
+            t(id::SET_HOTKEY_CAPTURE).to_string(),
+        ),
+        HotkeyState::Refused => (
+            t(id::SET_WAITING).to_string(),
+            t(id::SET_HOTKEY_REFUSED).to_string(),
+        ),
+        HotkeyState::InUse => (
+            t(id::SET_CHANGE).to_string(),
+            t(id::SET_HOTKEY_IN_USE).to_string(),
+        ),
+        HotkeyState::Idle if i.hotkey_ok => (
+            t(id::SET_CHANGE).to_string(),
+            t(id::SET_HOTKEY_DETAIL).to_string(),
+        ),
+        HotkeyState::Idle => (
+            t(id::SET_CHANGE).to_string(),
+            strings::fmt(lang, id::MENU_HOTKEY_UNAVAILABLE, &[&hotkey_text]),
+        ),
     };
+    let mut general = vec![
+        SettingsRow::toggle(row::AUTOSTART, t(id::SET_AUTOSTART), i.autostart),
+        SettingsRow::choice(
+            row::LANGUAGE,
+            t(id::SET_LANGUAGE),
+            &[t(id::LANG_AUTO), t(id::LANG_PT), t(id::LANG_EN)],
+            LangChoice::ALL
+                .iter()
+                .position(|c| *c == s.language)
+                .unwrap_or(0),
+        ),
+        SettingsRow::link(
+            row::HOTKEY,
+            &strings::fmt(lang, id::SET_HOTKEY_NOW, &[&hotkey_text]),
+            &hotkey_action,
+        )
+        .with_detail(&hotkey_detail),
+    ];
+    if i.hotkey != Hotkey::DEFAULT {
+        general.push(SettingsRow::link(
+            row::HOTKEY_RESET,
+            &strings::fmt(lang, id::SET_HOTKEY_RESET, &[&Hotkey::DEFAULT.text()]),
+            "",
+        ));
+    }
 
-    UiSettings::new(
+    let mut page = UiSettings::new(
         t(id::MENU_SETTINGS),
         vec![
             SettingsSection::new(t(id::SEC_APPEARANCE), appearance),
@@ -153,23 +249,8 @@ pub fn build(i: &PageInput<'_>) -> UiSettings {
                         .with_detail(t(id::SET_DND_DETAIL)),
                 ],
             ),
-            SettingsSection::new(
-                t(id::SEC_GENERAL),
-                vec![
-                    SettingsRow::toggle(row::AUTOSTART, t(id::SET_AUTOSTART), i.autostart),
-                    SettingsRow::choice(
-                        row::LANGUAGE,
-                        t(id::SET_LANGUAGE),
-                        &[t(id::LANG_AUTO), t(id::LANG_PT), t(id::LANG_EN)],
-                        LangChoice::ALL
-                            .iter()
-                            .position(|c| *c == s.language)
-                            .unwrap_or(0),
-                    ),
-                    SettingsRow::value(row::HOTKEY, t(id::SET_HOTKEY), i.hotkey)
-                        .with_detail(&hotkey_detail),
-                ],
-            ),
+            SettingsSection::new(t(id::SEC_DEVICES), device_rows(i)),
+            SettingsSection::new(t(id::SEC_GENERAL), general),
             SettingsSection::new(
                 t(id::SEC_ABOUT),
                 vec![
@@ -187,7 +268,62 @@ pub fn build(i: &PageInput<'_>) -> UiSettings {
                 ],
             ),
         ],
-    )
+    );
+    page.capturing = i.hotkey_state.waits();
+    if page.capturing {
+        page.focus = Some(row::HOTKEY);
+    }
+    page
+}
+
+/// The rows of the Dispositivos section: one per device (a text field while it is renamed), then the help line.
+fn device_rows(i: &PageInput<'_>) -> Vec<SettingsRow> {
+    let lang = i.lang;
+    let t = |key| strings::get(lang, key);
+    let last = i.devices.len().saturating_sub(1);
+    let mut rows: Vec<SettingsRow> = Vec::with_capacity(i.devices.len() + 1);
+    for (n, (rid, d)) in i.devices.iter().enumerate() {
+        if let Some(r) = i.rename.filter(|r| r.key == d.key) {
+            rows.push(
+                SettingsRow::text(
+                    *rid,
+                    &strings::fmt(lang, id::SET_DEV_RENAME, &[&d.default_name]),
+                    &r.text,
+                    true,
+                )
+                .with_selected(r.selected)
+                .with_placeholder(&d.default_name)
+                .with_detail(&strings::fmt(
+                    lang,
+                    id::SET_DEV_RENAME_HINT,
+                    &[&d.default_name],
+                )),
+            );
+            continue;
+        }
+        let detail = match (d.connection.is_empty(), d.shown) {
+            (_, true) => d.connection.clone(),
+            (true, false) => t(id::SET_DEV_HIDDEN).to_string(),
+            (false, false) => format!("{} \u{b7} {}", d.connection, t(id::SET_DEV_HIDDEN)),
+        };
+        let mut row = SettingsRow::device(
+            *rid,
+            &d.name,
+            d.kind.map_or(Glyph::Wireless, glyph_for),
+            d.shown,
+            (n > 0, n < last),
+        );
+        if !detail.is_empty() {
+            row = row.with_detail(&detail);
+        }
+        rows.push(row);
+    }
+    if i.devices.is_empty() {
+        rows.push(SettingsRow::note(row::DEVICES_NOTE, t(id::SET_DEV_NONE)));
+    } else {
+        rows.push(SettingsRow::note(row::DEVICES_NOTE, t(id::SET_DEV_HELP)));
+    }
+    rows
 }
 
 /// What the hit `(id, part)` on `page` asks for; `None` when it asks nothing (a part the row does not use, a
@@ -215,6 +351,23 @@ pub fn action(page: &UiSettings, id: RowId, part: u8) -> Option<Change> {
         (row::AUTOSTART, RowKind::Toggle { on }) if part == PART_ROW => {
             Some(Change::Autostart(!on))
         }
+        (row::HOTKEY, RowKind::Link { .. }) if part == PART_ROW => Some(Change::HotkeyCapture),
+        (row::HOTKEY_RESET, _) if part == PART_ROW => Some(Change::HotkeyReset),
+        (
+            rid,
+            RowKind::Device {
+                shown,
+                can_up,
+                can_down,
+                ..
+            },
+        ) => match part {
+            PART_SHOW => Some(Change::Device(rid, DeviceOp::Show(!shown))),
+            PART_RENAME => Some(Change::Device(rid, DeviceOp::Rename)),
+            PART_UP if *can_up => Some(Change::Device(rid, DeviceOp::Up)),
+            PART_DOWN if *can_down => Some(Change::Device(rid, DeviceOp::Down)),
+            _ => None,
+        },
         (row::TRANSPARENCY, _) if part == PART_ROW => Some(Change::Open(TRANSPARENCY_URL)),
         (row::GITHUB, _) if part == PART_ROW => Some(Change::Open(GITHUB_URL)),
         (row::LICENSE, _) if part == PART_ROW => Some(Change::Open(LICENSE_URL)),
@@ -225,6 +378,7 @@ pub fn action(page: &UiSettings, id: RowId, part: u8) -> Option<Change> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use juicebar_core::types::{DeviceKey, Kind};
     use juicebar_ui::settings::{NavKey, PART_MINUS, PART_PLUS, PART_SEGMENT};
 
     fn page_for(
@@ -238,9 +392,63 @@ mod tests {
             lang,
             autostart: true,
             transparency,
-            hotkey: "Ctrl+Alt+B",
+            hotkey: Hotkey::DEFAULT,
             hotkey_ok: true,
+            hotkey_state: HotkeyState::Idle,
+            devices: &[],
+            rename: None,
             adjusted,
+        })
+    }
+
+    fn choice(key: &str, name: &str, kind: Kind, shown: bool) -> DeviceChoice {
+        DeviceChoice {
+            key: DeviceKey(key.into()),
+            name: name.into(),
+            default_name: name.into(),
+            kind: Some(kind),
+            connection: "Receptor".into(),
+            shown,
+            on: true,
+        }
+    }
+
+    /// Three devices with the ids the app would hand out; the last one is hidden.
+    fn three() -> Vec<(RowId, DeviceChoice)> {
+        vec![
+            (
+                row::DEVICE_BASE,
+                choice("k:mouse", "G703", Kind::Mouse, true),
+            ),
+            (
+                row::DEVICE_BASE + 1,
+                choice("k:keys", "G915 X", Kind::Keyboard, true),
+            ),
+            (
+                row::DEVICE_BASE + 2,
+                choice("k:head", "G733", Kind::Headset, false),
+            ),
+        ]
+    }
+
+    fn page_with(
+        devices: &[(RowId, DeviceChoice)],
+        rename: Option<&Rename>,
+        hotkey: Hotkey,
+        state: HotkeyState,
+        lang: Lang,
+    ) -> UiSettings {
+        build(&PageInput {
+            settings: &Settings::default(),
+            lang,
+            autostart: false,
+            transparency: true,
+            hotkey,
+            hotkey_ok: true,
+            hotkey_state: state,
+            devices,
+            rename,
+            adjusted: None,
         })
     }
 
@@ -259,11 +467,25 @@ mod tests {
         };
         assert_eq!(
             titles(Lang::PtBr),
-            ["Aparência", "Ícone", "Alertas", "Geral", "Sobre"]
+            [
+                "Aparência",
+                "Ícone",
+                "Alertas",
+                "Dispositivos",
+                "Geral",
+                "Sobre"
+            ]
         );
         assert_eq!(
             titles(Lang::En),
-            ["Appearance", "Icon", "Alerts", "General", "About"]
+            [
+                "Appearance",
+                "Icon",
+                "Alerts",
+                "Devices",
+                "General",
+                "About"
+            ]
         );
         assert_eq!(page().title, "Configurações");
     }
@@ -330,10 +552,11 @@ mod tests {
         ));
         assert_eq!(
             kind(row::HOTKEY),
-            RowKind::Value {
-                text: "Ctrl+Alt+B".into()
+            RowKind::Link {
+                action: "Change".into()
             }
         );
+        assert_eq!(p.row(row::HOTKEY).unwrap().label, "Shortcut: Ctrl+Alt+B");
     }
 
     #[test]
@@ -509,8 +732,11 @@ mod tests {
             lang: Lang::PtBr,
             autostart: false,
             transparency: true,
-            hotkey: "Ctrl+Alt+B",
+            hotkey: Hotkey::DEFAULT,
             hotkey_ok: false,
+            hotkey_state: HotkeyState::Idle,
+            devices: &[],
+            rename: None,
             adjusted: None,
         });
         assert_eq!(
@@ -519,9 +745,351 @@ mod tests {
         );
         assert_eq!(
             action(&p, row::HOTKEY, PART_ROW),
-            None,
-            "part 2 makes it editable"
+            Some(Change::HotkeyCapture),
+            "and it can be changed"
         );
+    }
+
+    #[test]
+    fn the_shortcut_row_shows_the_combination_and_waits_for_keys_on_a_click() {
+        let hk = Hotkey::parse("Win+Alt+F11").unwrap();
+        let p = page_with(&[], None, hk, HotkeyState::Idle, Lang::PtBr);
+        let r = p.row(row::HOTKEY).unwrap();
+        assert_eq!(r.label, "Atalho: Alt+Win+F11");
+        assert_eq!(
+            r.kind,
+            RowKind::Link {
+                action: "Alterar".into()
+            }
+        );
+        assert_eq!(
+            r.detail.as_deref(),
+            Some("Abre o JuiceBar de qualquer lugar")
+        );
+        assert!(!p.capturing && p.focus.is_none());
+        assert_eq!(
+            action(&p, row::HOTKEY, PART_ROW),
+            Some(Change::HotkeyCapture)
+        );
+    }
+
+    #[test]
+    fn while_it_waits_the_page_says_how_to_finish_and_takes_the_keys() {
+        for (lang, waiting, how) in [
+            (
+                Lang::PtBr,
+                "Aguardando...",
+                "Segure dois entre Ctrl, Alt, Shift ou Win e aperte uma letra, número ou tecla F. Esc cancela.",
+            ),
+            (
+                Lang::En,
+                "Waiting...",
+                "Hold two of Ctrl, Alt, Shift or Win and press a letter, digit or F key. Esc cancels.",
+            ),
+        ] {
+            let p = page_with(&[], None, Hotkey::DEFAULT, HotkeyState::Capturing, lang);
+            assert!(p.capturing, "the flyout sends the combination");
+            assert_eq!(p.focus, Some(row::HOTKEY), "the row shows it waits");
+            let r = p.row(row::HOTKEY).unwrap();
+            assert_eq!(
+                r.kind,
+                RowKind::Link {
+                    action: waiting.into()
+                }
+            );
+            assert_eq!(r.detail.as_deref(), Some(how));
+        }
+    }
+
+    #[test]
+    fn a_refused_combination_says_why_and_the_wait_goes_on() {
+        for (lang, why) in [
+            (
+                Lang::PtBr,
+                "Use pelo menos dois modificadores, como Ctrl+Alt",
+            ),
+            (Lang::En, "Use at least two modifiers, like Ctrl+Alt"),
+        ] {
+            let p = page_with(&[], None, Hotkey::DEFAULT, HotkeyState::Refused, lang);
+            assert!(p.capturing, "still waiting for keys");
+            assert_eq!(p.focus, Some(row::HOTKEY));
+            assert_eq!(p.row(row::HOTKEY).unwrap().detail.as_deref(), Some(why));
+        }
+        assert!(HotkeyState::Capturing.waits() && HotkeyState::Refused.waits());
+        assert!(!HotkeyState::Idle.waits() && !HotkeyState::InUse.waits());
+    }
+
+    #[test]
+    fn a_taken_shortcut_says_so_in_the_owners_words() {
+        let p = page_with(&[], None, Hotkey::DEFAULT, HotkeyState::InUse, Lang::PtBr);
+        assert_eq!(
+            p.row(row::HOTKEY).unwrap().detail.as_deref(),
+            Some("Esse atalho já está em uso")
+        );
+        assert!(!p.capturing);
+        let en = page_with(&[], None, Hotkey::DEFAULT, HotkeyState::InUse, Lang::En);
+        assert_eq!(
+            en.row(row::HOTKEY).unwrap().detail.as_deref(),
+            Some("That shortcut is already in use")
+        );
+    }
+
+    #[test]
+    fn restoring_the_default_shows_only_for_another_shortcut() {
+        let idle = |hk| page_with(&[], None, hk, HotkeyState::Idle, Lang::PtBr);
+        assert!(idle(Hotkey::DEFAULT).row(row::HOTKEY_RESET).is_none());
+        let p = idle(Hotkey::parse("Ctrl+Alt+J").unwrap());
+        let r = p.row(row::HOTKEY_RESET).unwrap();
+        assert_eq!(r.label, "Restaurar padrão (Ctrl+Alt+B)");
+        assert_eq!(
+            action(&p, row::HOTKEY_RESET, PART_ROW),
+            Some(Change::HotkeyReset)
+        );
+        // Both are in the Geral card, the reset right under the shortcut.
+        let general = p.sections.iter().find(|s| s.title == "Geral").unwrap();
+        let ids: Vec<RowId> = general.rows.iter().map(|r| r.id).collect();
+        assert_eq!(ids[ids.len() - 2..], [row::HOTKEY, row::HOTKEY_RESET]);
+    }
+
+    #[test]
+    fn the_devices_section_lists_every_device_with_glyph_name_and_connection() {
+        let p = page_with(
+            &three(),
+            None,
+            Hotkey::DEFAULT,
+            HotkeyState::Idle,
+            Lang::PtBr,
+        );
+        let sec = p
+            .sections
+            .iter()
+            .find(|s| s.title == "Dispositivos")
+            .unwrap();
+        // Three devices and the help line.
+        assert_eq!(sec.rows.len(), 4);
+        let r = &sec.rows[0];
+        assert_eq!(r.label, "G703");
+        assert_eq!(r.detail.as_deref(), Some("Receptor"));
+        assert_eq!(
+            r.kind,
+            RowKind::Device {
+                glyph: Glyph::Mouse,
+                shown: true,
+                can_up: false,
+                can_down: true
+            }
+        );
+        assert!(matches!(
+            sec.rows[1].kind,
+            RowKind::Device {
+                glyph: Glyph::Keyboard,
+                can_up: true,
+                can_down: true,
+                ..
+            }
+        ));
+        // The hidden one says so and has no way further down.
+        assert_eq!(
+            sec.rows[2].detail.as_deref(),
+            Some("Receptor \u{b7} oculto")
+        );
+        assert_eq!(
+            sec.rows[2].kind,
+            RowKind::Device {
+                glyph: Glyph::Headset,
+                shown: false,
+                can_up: true,
+                can_down: false
+            }
+        );
+        assert_eq!(
+            sec.rows[3].label,
+            "Chave: mostrar no painel. Lápis: renomear. Setas: mudar a ordem."
+        );
+        let en = page_with(&three(), None, Hotkey::DEFAULT, HotkeyState::Idle, Lang::En);
+        assert_eq!(
+            en.row(row::DEVICE_BASE + 2).unwrap().detail.as_deref(),
+            Some("Receptor \u{b7} hidden")
+        );
+    }
+
+    #[test]
+    fn a_device_never_seen_this_run_shows_only_that_it_is_hidden() {
+        let mut d = choice("k:old", "G502", Kind::Mouse, false);
+        d.kind = None;
+        d.connection = String::new();
+        let list = vec![(row::DEVICE_BASE, d)];
+        let p = page_with(&list, None, Hotkey::DEFAULT, HotkeyState::Idle, Lang::PtBr);
+        let r = p.row(row::DEVICE_BASE).unwrap();
+        assert_eq!(r.detail.as_deref(), Some("oculto"));
+        assert!(matches!(
+            r.kind,
+            RowKind::Device {
+                glyph: Glyph::Wireless,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn no_device_at_all_says_so() {
+        let p = page_with(&[], None, Hotkey::DEFAULT, HotkeyState::Idle, Lang::PtBr);
+        let sec = p
+            .sections
+            .iter()
+            .find(|s| s.title == "Dispositivos")
+            .unwrap();
+        assert_eq!(sec.rows.len(), 1);
+        assert_eq!(sec.rows[0].label, "Nenhum dispositivo visto ainda");
+    }
+
+    #[test]
+    fn each_control_of_a_device_row_asks_for_its_own_change() {
+        let p = page_with(
+            &three(),
+            None,
+            Hotkey::DEFAULT,
+            HotkeyState::Idle,
+            Lang::PtBr,
+        );
+        let (mouse, keys, head) = (row::DEVICE_BASE, row::DEVICE_BASE + 1, row::DEVICE_BASE + 2);
+        assert_eq!(
+            action(&p, mouse, PART_SHOW),
+            Some(Change::Device(mouse, DeviceOp::Show(false)))
+        );
+        assert_eq!(
+            action(&p, head, PART_SHOW),
+            Some(Change::Device(head, DeviceOp::Show(true))),
+            "a hidden device is shown again"
+        );
+        assert_eq!(
+            action(&p, keys, PART_RENAME),
+            Some(Change::Device(keys, DeviceOp::Rename))
+        );
+        assert_eq!(
+            action(&p, keys, PART_UP),
+            Some(Change::Device(keys, DeviceOp::Up))
+        );
+        assert_eq!(
+            action(&p, keys, PART_DOWN),
+            Some(Change::Device(keys, DeviceOp::Down))
+        );
+        // The first cannot go up, the last cannot go down, a click on the rest of the row asks nothing.
+        assert_eq!(action(&p, mouse, PART_UP), None);
+        assert_eq!(action(&p, head, PART_DOWN), None);
+        assert_eq!(action(&p, keys, PART_ROW), None);
+    }
+
+    #[test]
+    fn the_keyboard_reaches_each_device_row_and_asks_the_same() {
+        let mut p = page_with(
+            &three(),
+            None,
+            Hotkey::DEFAULT,
+            HotkeyState::Idle,
+            Lang::PtBr,
+        );
+        let keys = row::DEVICE_BASE + 1;
+        assert!(p.focusable().contains(&keys));
+        p.focus = Some(keys);
+        let ask = |p: &UiSettings, k| {
+            let (id, part) = p.activate(k).unwrap();
+            action(p, id, part)
+        };
+        assert_eq!(
+            ask(&p, NavKey::Space),
+            Some(Change::Device(keys, DeviceOp::Show(false)))
+        );
+        assert_eq!(
+            ask(&p, NavKey::Enter),
+            Some(Change::Device(keys, DeviceOp::Rename))
+        );
+        assert_eq!(
+            ask(&p, NavKey::Left),
+            Some(Change::Device(keys, DeviceOp::Up))
+        );
+        assert_eq!(
+            ask(&p, NavKey::Right),
+            Some(Change::Device(keys, DeviceOp::Down))
+        );
+        // At the ends the arrows do nothing.
+        p.focus = Some(row::DEVICE_BASE);
+        assert_eq!(p.activate(NavKey::Left), None);
+        p.focus = Some(row::DEVICE_BASE + 2);
+        assert_eq!(p.activate(NavKey::Right), None);
+    }
+
+    #[test]
+    fn the_row_being_renamed_is_a_text_field_with_the_name_selected() {
+        let mut r = Rename::new(DeviceKey("k:keys".into()), "G915 X", "G915 X");
+        let p = page_with(
+            &three(),
+            Some(&r),
+            Hotkey::DEFAULT,
+            HotkeyState::Idle,
+            Lang::PtBr,
+        );
+        let keys = row::DEVICE_BASE + 1;
+        let row = p.row(keys).unwrap();
+        assert_eq!(row.label, "Nome para G915 X");
+        assert_eq!(
+            row.detail.as_deref(),
+            Some("Enter salva, Esc cancela. Vazio volta para G915 X.")
+        );
+        assert_eq!(
+            row.kind,
+            RowKind::Text {
+                value: "G915 X".into(),
+                placeholder: "G915 X".into(),
+                editing: true,
+                selected: true
+            }
+        );
+        assert!(p.editing(), "the keys go to the field");
+        // The other devices keep their controls, and a click in the field asks nothing.
+        assert!(matches!(
+            p.row(row::DEVICE_BASE).unwrap().kind,
+            RowKind::Device { .. }
+        ));
+        assert_eq!(action(&p, keys, PART_ROW), None);
+        // Once typed over, the selection is gone.
+        r.key(juicebar_ui::settings::EditKey::Char('T'));
+        let p = page_with(
+            &three(),
+            Some(&r),
+            Hotkey::DEFAULT,
+            HotkeyState::Idle,
+            Lang::En,
+        );
+        assert_eq!(
+            p.row(keys).unwrap().kind,
+            RowKind::Text {
+                value: "T".into(),
+                placeholder: "G915 X".into(),
+                editing: true,
+                selected: false
+            }
+        );
+        assert_eq!(p.row(keys).unwrap().label, "Name for G915 X");
+    }
+
+    #[test]
+    fn device_row_ids_never_meet_the_fixed_ones() {
+        let mut ids: Vec<RowId> = page_with(
+            &three(),
+            None,
+            Hotkey::parse("Ctrl+Alt+J").unwrap(),
+            HotkeyState::Idle,
+            Lang::PtBr,
+        )
+        .rows()
+        .map(|r| r.id)
+        .collect();
+        let n = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), n);
+        const { assert!(row::PRIVACY < row::DEVICE_BASE && row::DEVICES_NOTE < row::DEVICE_BASE) };
     }
 
     #[test]
@@ -530,7 +1098,8 @@ mod tests {
         assert_eq!(action(&p, row::ABOUT, PART_ROW), None);
         assert_eq!(action(&p, row::PRIVACY, PART_ROW), None);
         assert_eq!(action(&p, 999, PART_ROW), None);
-        // Tab visits Tema, animation, the three steppers, three toggles, autostart, language, then the two links.
+        // Tab visits Tema, animation, the three steppers, three toggles, autostart, language, the shortcut, then the
+        // two links.
         let mut order = Vec::new();
         for _ in 0..p.focusable().len() {
             order.push(p.move_focus(true).unwrap());
@@ -548,6 +1117,7 @@ mod tests {
                 row::DND,
                 row::AUTOSTART,
                 row::LANGUAGE,
+                row::HOTKEY,
                 row::GITHUB,
                 row::LICENSE
             ]
