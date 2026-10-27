@@ -6,7 +6,7 @@ Both apps compute these the same way from the readings providers report (`spec/P
 - **Readings:** wall time (seconds since the epoch, UTC), percent (0 to 100), charging state, quality (`exact`, `derived`, `coarse`). A device with `coarse` quality only shows its level and gets no forecast. A reading in state `unknown` is stored but neither observes nor breaks anything.
 - **Presence:** online and offline moments; a device is offline until its first presence event, and a reading never makes it online. Forecasts and time to full exist only while it is online. *Use time* is the time the device is online; JuiceBar cannot see whether a connected device is being touched, so "uso" means connected time.
 - **Settings that change consumption:** the RGB economy switch, recorded with its moments.
-- **Model prior** from `spec/devices.tsv`: rated hours of use and rated hours to charge (Logitech's own figures, `docs/research/hidpp-and-lighting.md`); defaults 20 h and 2.5 h for an unknown model.
+- **Model prior** from `spec/devices.tsv`: rated hours of use and rated hours to charge (Logitech's own figures, `docs/research/hidpp-and-lighting.md`); defaults 20 h and 2.5 h for an unknown model. The rated use is `use_h_rgb` while the RGB economy is off (the device's lighting on, the default) and `use_h` while it is on; a model with only one figure uses it in both.
 
 ## Discharge rate
 1. A *segment* is a run of readings while discharging, broken by any charge. A level that rises while discharging (a charge JuiceBar did not see) starts a new anchor.
