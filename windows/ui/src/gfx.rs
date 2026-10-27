@@ -1,17 +1,28 @@
 // Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
 //! Direct2D and DirectWrite plumbing: factories, a `Canvas` with safe drawing helpers, text
 //! layouts, SVG-path geometry, and the offscreen (WIC) render target with the PNG writer.
+//!
+//! Direct2D draws on the CPU only (WIC bitmap targets), and `d2d1.dll` is loaded by `Gfx::new`
+//! and unloaded when the last `Gfx` is dropped. Drawing makes Direct2D load `d3d11.dll` (and,
+//! with a window in the process, the WARP rasterizer); while `d3d11.dll` stays loaded, the next
+//! activation of one of our windows costs about 54 MiB of private memory that is never given
+//! back (measured on Windows 11 build 26300 with `examples/mem_probe.rs`; an overlay hook such
+//! as RTSS reacting to Direct3D in the process is the likely cause, not confirmed). Unloading
+//! `d2d1.dll` between uses unloads `d3d11.dll` with it.
 
 use std::path::Path;
 
-use windows::Win32::Foundation::{GENERIC_WRITE, RPC_E_CHANGED_MODE};
+use windows::Win32::Foundation::{FreeLibrary, GENERIC_WRITE, HMODULE, RPC_E_CHANGED_MODE};
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Imaging::*;
 use windows::Win32::System::Com::*;
-use windows::core::{Error, GUID, Interface, PCWSTR, Result};
+use windows::Win32::System::LibraryLoader::{
+    GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+};
+use windows::core::{Error, GUID, HRESULT, Interface, PCWSTR, Result, s, w};
 
 use crate::layout::Rect;
 use crate::svgpath::{self, Seg};
@@ -162,22 +173,69 @@ pub struct Fonts {
     pub display: Vec<u16>,
 }
 
-/// Direct2D and DirectWrite factories plus the font choice.
+/// One reference to `d2d1.dll`, loaded at run time (never imported), freed on drop.
+struct D2dLibrary(HMODULE);
+
+impl Drop for D2dLibrary {
+    fn drop(&mut self) {
+        // SAFETY: the reference taken in `D2dLibrary::load`. `Gfx` drops its factory before this
+        // field, and the crate keeps every other Direct2D object (render targets, brushes,
+        // geometries) inside the drawing call that made it, so none outlives the `Gfx`.
+        unsafe {
+            let _ = FreeLibrary(self.0);
+        }
+    }
+}
+
+type CreateFactoryFn = unsafe extern "system" fn(
+    D2D1_FACTORY_TYPE,
+    *const GUID,
+    *const D2D1_FACTORY_OPTIONS,
+    *mut *mut std::ffi::c_void,
+) -> HRESULT;
+
+impl D2dLibrary {
+    fn load() -> Result<(D2dLibrary, ID2D1Factory)> {
+        // SAFETY: loads the system's own d2d1.dll from System32.
+        let module = unsafe { LoadLibraryExW(w!("d2d1.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32)? };
+        let lib = D2dLibrary(module);
+        // SAFETY: `module` is loaded; the export has the documented `D2D1CreateFactory` signature.
+        let create: CreateFactoryFn = unsafe {
+            std::mem::transmute(
+                GetProcAddress(module, s!("D2D1CreateFactory")).ok_or_else(Error::from_thread)?,
+            )
+        };
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: valid IID and out pointer; no options.
+        unsafe {
+            create(
+                D2D1_FACTORY_TYPE_SINGLE_THREADED,
+                &ID2D1Factory::IID,
+                std::ptr::null(),
+                &mut raw,
+            )
+            .ok()?;
+        }
+        // SAFETY: on success `raw` is an owned ID2D1Factory reference.
+        Ok((lib, unsafe { ID2D1Factory::from_raw(raw) }))
+    }
+}
+
+/// Direct2D and DirectWrite factories plus the font choice. Make one for a burst of drawing and
+/// drop it after: the last one dropped unloads Direct2D (see the module notes), so no Direct2D
+/// object made with it may be kept past its drop.
 pub struct Gfx {
-    /// The base factory, for geometry and stroke styles.
+    /// The factory, for render targets, geometry and stroke styles.
     pub d2d: ID2D1Factory,
-    /// The same factory as `ID2D1Factory1`, which makes the window's Direct2D device.
-    pub d2d1: ID2D1Factory1,
     pub dw: IDWriteFactory,
     pub fonts: Fonts,
+    /// Declared last so it is dropped after the factory.
+    _lib: D2dLibrary,
 }
 
 impl Gfx {
     pub fn new() -> Result<Gfx> {
-        // SAFETY: plain factory creation, no pointers passed besides None.
-        let d2d1: ID2D1Factory1 =
-            unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
-        let d2d: ID2D1Factory = d2d1.cast()?;
+        let (lib, d2d) = D2dLibrary::load()?;
         // SAFETY: plain factory creation.
         let dw: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
         let fonts = Fonts {
@@ -186,9 +244,9 @@ impl Gfx {
         };
         Ok(Gfx {
             d2d,
-            d2d1,
             dw,
             fonts,
+            _lib: lib,
         })
     }
 
@@ -697,6 +755,33 @@ pub fn render_offscreen<F>(
 where
     F: FnOnce(&Canvas) -> Result<()>,
 {
+    let mut data = vec![0u8; (width * 4 * height) as usize];
+    render_offscreen_into(gfx, width, height, scale, &mut data, draw)?;
+    Ok(Pixels {
+        width,
+        height,
+        data,
+    })
+}
+
+/// `render_offscreen` into a caller's buffer of `width * 4 * height` bytes (top-down rows), such
+/// as the flyout window's DIB section. Direct2D rasterizes on the CPU here: no Direct3D device,
+/// so no GPU driver is loaded into the process.
+pub fn render_offscreen_into<F>(
+    gfx: &Gfx,
+    width: u32,
+    height: u32,
+    scale: f32,
+    out: &mut [u8],
+    draw: F,
+) -> Result<()>
+where
+    F: FnOnce(&Canvas) -> Result<()>,
+{
+    let stride = width * 4;
+    if out.len() != (stride * height) as usize {
+        return Err(Error::from(windows::Win32::Foundation::E_INVALIDARG));
+    }
     ensure_com();
     // SAFETY: standard in-process COM creation.
     let wic: IWICImagingFactory =
@@ -711,7 +796,7 @@ where
         )?
     };
     let props = D2D1_RENDER_TARGET_PROPERTIES {
-        r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
         pixelFormat: D2D1_PIXEL_FORMAT {
             format: DXGI_FORMAT_B8G8R8A8_UNORM,
             alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
@@ -728,15 +813,8 @@ where
     let drawn = draw(&canvas);
     canvas.end()?;
     drawn?;
-    let stride = width * 4;
-    let mut data = vec![0u8; (stride * height) as usize];
-    // SAFETY: `data` is exactly stride * height bytes, the size CopyPixels is told.
-    unsafe { bitmap.CopyPixels(std::ptr::null(), stride, &mut data)? };
-    Ok(Pixels {
-        width,
-        height,
-        data,
-    })
+    // SAFETY: `out` is exactly stride * height bytes (checked above), the size CopyPixels is told.
+    unsafe { bitmap.CopyPixels(std::ptr::null(), stride, out) }
 }
 
 /// Writes premultiplied BGRA pixels as a PNG file.

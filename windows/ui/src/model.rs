@@ -67,6 +67,43 @@ pub struct UiDevice {
     pub expanded: bool,
 }
 
+/// The flyout's fixed labels, in the user's language. `Default` is pt-BR; the app fills them
+/// from the core's string table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiLabels {
+    /// Over the chart: "Últimos 7 dias".
+    pub last_7_days: String,
+    /// The chart's key for the dashed line: "previsão".
+    pub forecast: String,
+    /// Stat label: "Hoje".
+    pub today: String,
+    /// After today's usage time: "de uso" ("4 h 10 min de uso").
+    pub of_use: String,
+    /// Stat label: "Saúde da bateria".
+    pub battery_health: String,
+    /// The health value while it is still being learned: "aprendendo".
+    pub learning: String,
+    /// Separator over the devices that are off: "Desligados".
+    pub off_devices: String,
+    /// The footer switch: "Economia de RGB".
+    pub rgb_economy: String,
+}
+
+impl Default for UiLabels {
+    fn default() -> UiLabels {
+        UiLabels {
+            last_7_days: "Últimos 7 dias".into(),
+            forecast: "previsão".into(),
+            today: "Hoje".into(),
+            of_use: "de uso".into(),
+            battery_health: "Saúde da bateria".into(),
+            learning: "aprendendo".into(),
+            off_devices: "Desligados".into(),
+            rgb_economy: "Economia de RGB".into(),
+        }
+    }
+}
+
 /// Everything the flyout draws.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UiState {
@@ -83,6 +120,8 @@ pub struct UiState {
     /// Shown in place of the device list while there are no devices: the first line is the
     /// title, a second line (after a line break) the hint. Unused when `devices` is not empty.
     pub empty_text: String,
+    /// The fixed labels.
+    pub labels: UiLabels,
 }
 
 impl UiState {
@@ -202,6 +241,7 @@ impl UiState {
                 day("dom"),
             ],
             empty_text: String::new(),
+            labels: UiLabels::default(),
         }
     }
 }

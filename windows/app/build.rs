@@ -42,10 +42,6 @@ fn main() {
     let path = out.join("JuiceBar.manifest");
     std::fs::write(&path, MANIFEST).expect("write the manifest");
     println!("cargo:rustc-link-arg-bins=/MANIFEST:EMBED");
-    for dll in ["d3d11.dll", "dcomp.dll", "dxgi.dll"] {
-        println!("cargo:rustc-link-arg-bins=/DELAYLOAD:{dll}");
-    }
-    println!("cargo:rustc-link-arg-bins=delayimp.lib");
     println!(
         "cargo:rustc-link-arg-bins=/MANIFESTINPUT:{}",
         path.display()

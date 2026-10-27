@@ -2,6 +2,11 @@
 //! The tray mark: a juice glass with a straw, drawn with Direct2D from the SVG paths of
 //! `spec/design/mark/`. Monochrome in the taskbar's foreground; red juice for a warning, a bolt
 //! cut out of the juice while charging.
+//!
+//! The mark fills the icon's height like the system's own tray icons (whose ink spans the whole
+//! 16 px slot at 100 %), and is fitted to the pixel grid at every size: the stroke is a whole
+//! number of pixels, and the straw's top bar, the glass bottom and the juice surface sit on pixel
+//! edges, so the horizontal lines stay sharp.
 
 use std::path::Path;
 
@@ -12,9 +17,10 @@ use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, HICON, ICONINFO};
 use windows::core::{Error, Result};
 
-use crate::gfx::{Canvas, Color, Gfx, Pixels, render_offscreen, scale_translate, write_png};
-use crate::glyphs::{MARK_BOLT, MARK_GLASS, MARK_JUICE, MARK_STRAW, MARK_STROKE, MARK_VIEWBOX};
+use crate::gfx::{Canvas, Color, Gfx, Pixels, render_offscreen, write_png};
+use crate::glyphs::{MARK_BOLT, MARK_GLASS, MARK_JUICE, MARK_STRAW, MARK_STROKE};
 use crate::model::IconState;
+use crate::svgpath::{self, Seg};
 
 /// White on a dark taskbar, near-black on a light one.
 pub fn foreground(dark_taskbar: bool) -> Color {
@@ -37,27 +43,123 @@ pub fn taskbar_background(dark_taskbar: bool) -> Color {
     }
 }
 
+// Lines of the mark's view box the fit puts on pixel edges.
+/// Centre line of the straw's top bar.
+const TOP: f32 = 2.0;
+/// The juice surface.
+const JUICE: f32 = 9.5;
+/// Centre line of the glass bottom.
+const BOTTOM: f32 = 14.25;
+/// Middle between the glass's left rim and the straw's end: the mark's horizontal centre.
+const CENTRE_X: f32 = (3.5 + 13.0) / 2.0;
+
+/// How the mark's 16-unit view box lands on a `px` x `px` icon.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MarkFit {
+    /// Pixels per view-box unit.
+    pub k: f32,
+    /// Stroke width in pixels (whole).
+    pub stroke: f32,
+    ox: f32,
+    top: f32,
+    juice: f32,
+    bottom: f32,
+}
+
+impl MarkFit {
+    pub fn new(px: f32) -> MarkFit {
+        // The design's ink is 13.75 units tall (stroke included) and should span `px`.
+        let stroke = (MARK_STROKE * px / (BOTTOM - TOP + MARK_STROKE))
+            .round()
+            .max(1.0);
+        let k = (px - stroke) / (BOTTOM - TOP);
+        let top = stroke / 2.0;
+        MarkFit {
+            k,
+            stroke,
+            ox: px / 2.0 - CENTRE_X * k,
+            top,
+            juice: (top + (JUICE - TOP) * k).round(),
+            bottom: px - stroke / 2.0,
+        }
+    }
+
+    /// A view-box point in pixels.
+    pub fn point(&self, x: f32, y: f32) -> (f32, f32) {
+        let py = if y <= JUICE {
+            self.top + (y - TOP) * (self.juice - self.top) / (JUICE - TOP)
+        } else {
+            self.juice + (y - JUICE) * (self.bottom - self.juice) / (BOTTOM - JUICE)
+        };
+        (self.ox + x * self.k, py)
+    }
+
+    /// SVG path data in view-box units as segments in pixels.
+    fn segments(&self, d: &str) -> Result<Vec<Seg>> {
+        let segs =
+            svgpath::parse(d).map_err(|_| Error::from(windows::Win32::Foundation::E_INVALIDARG))?;
+        let p = |x, y| self.point(x, y);
+        Ok(segs
+            .into_iter()
+            .map(|s| match s {
+                Seg::Move(x, y) => {
+                    let (x, y) = p(x, y);
+                    Seg::Move(x, y)
+                }
+                Seg::Line(x, y) => {
+                    let (x, y) = p(x, y);
+                    Seg::Line(x, y)
+                }
+                Seg::Cubic(x1, y1, x2, y2, x, y) => {
+                    let ((x1, y1), (x2, y2), (x, y)) = (p(x1, y1), p(x2, y2), p(x, y));
+                    Seg::Cubic(x1, y1, x2, y2, x, y)
+                }
+                Seg::Arc {
+                    rx,
+                    ry,
+                    rot,
+                    large,
+                    sweep,
+                    x,
+                    y,
+                } => {
+                    let (x, y) = p(x, y);
+                    Seg::Arc {
+                        rx: rx * self.k,
+                        ry: ry * self.k,
+                        rot,
+                        large,
+                        sweep,
+                        x,
+                        y,
+                    }
+                }
+                Seg::Close => Seg::Close,
+            })
+            .collect())
+    }
+}
+
 /// Draws the mark filling a `px` x `px` canvas whose transform is the identity.
 pub fn draw_mark(c: &Canvas, state: IconState, dark_taskbar: bool, px: f32) -> Result<()> {
     let fg = foreground(dark_taskbar);
-    c.set_transform(scale_translate(px / MARK_VIEWBOX, 0.0, 0.0));
-    let result = (|| -> Result<()> {
-        match state {
-            IconState::Normal => c.fill_geometry(&c.path(MARK_JUICE, true)?.into(), fg),
-            IconState::Warning => c.fill_geometry(&c.path(MARK_JUICE, true)?.into(), WARNING_RED),
-            IconState::Charging => {
-                let juice: ID2D1Geometry = c.path(MARK_JUICE, true)?.into();
-                let bolt: ID2D1Geometry = c.path(MARK_BOLT, true)?.into();
-                let cut = juice_with_bolt(c, &juice, &bolt)?;
-                c.fill_geometry(&cut.into(), fg);
-            }
+    let fit = MarkFit::new(px);
+    let path = |d: &str, filled: bool| -> Result<ID2D1PathGeometry> {
+        c.geometry(&fit.segments(d)?, filled)
+    };
+    match state {
+        IconState::Normal => c.fill_geometry(&path(MARK_JUICE, true)?.into(), fg),
+        IconState::Warning => c.fill_geometry(&path(MARK_JUICE, true)?.into(), WARNING_RED),
+        IconState::Charging => {
+            let juice: ID2D1Geometry = path(MARK_JUICE, true)?.into();
+            let bolt: ID2D1Geometry = path(MARK_BOLT, true)?.into();
+            let cut = juice_with_bolt(c, &juice, &bolt)?;
+            c.fill_geometry(&cut.into(), fg);
         }
-        c.stroke_geometry(&c.path(MARK_GLASS, false)?.into(), MARK_STROKE, fg, None);
-        c.stroke_geometry(&c.path(MARK_STRAW, false)?.into(), MARK_STROKE, fg, None);
-        Ok(())
-    })();
-    c.set_transform(crate::gfx::IDENTITY);
-    result
+    }
+    c.stroke_geometry(&path(MARK_GLASS, false)?.into(), fit.stroke, fg, None);
+    c.stroke_geometry(&path(MARK_STRAW, false)?.into(), fit.stroke, fg, None);
+    Ok(())
 }
 
 /// The juice minus the bolt (the SVG's mask).
@@ -257,22 +359,74 @@ mod tests {
         }
     }
 
+    /// The pixel holding view-box point (x, y) of the mark at `px`.
+    fn at(px: u32, x: f32, y: f32) -> (u32, u32) {
+        let (fx, fy) = MarkFit::new(px as f32).point(x, y);
+        (fx as u32, fy as u32)
+    }
+
     #[test]
     fn mark_uses_the_taskbar_foreground() {
         let dark = mark_pixels(IconState::Normal, true, 32).unwrap();
         let light = mark_pixels(IconState::Normal, false, 32).unwrap();
-        // Inside the juice (view box 8,12 -> pixels 16,24).
-        assert_eq!(rgb_at(&dark, 16, 24), [255, 255, 255]);
-        let l = rgb_at(&light, 16, 24);
+        // Inside the juice (view box 8, 12).
+        let (x, y) = at(32, 8.0, 12.0);
+        assert_eq!(rgb_at(&dark, x, y), [255, 255, 255]);
+        let l = rgb_at(&light, x, y);
         assert!(l.iter().all(|&c| (c as i32 - 0x1b).abs() <= 2), "{l:?}");
+    }
+
+    /// Like the system's tray icons, the ink spans the icon's full height at every size; the
+    /// straw's top bar and the glass bottom are whole rows of solid ink (sharp, not smeared).
+    #[test]
+    fn mark_fills_the_height_on_the_pixel_grid() {
+        for px in [16u32, 20, 24, 32] {
+            let m = mark_pixels(IconState::Normal, true, px).unwrap();
+            let fit = MarkFit::new(px as f32);
+            let sw = fit.stroke as u32;
+            let row_ink = |y: u32| (0..px).filter(|&x| alpha_at(&m, x, y) > 0).count();
+            assert!(
+                row_ink(0) > 0 && row_ink(px - 1) > 0,
+                "{px}: ink from top to bottom"
+            );
+            // The straw's bar between view box x 10 and 12: solid for `sw` rows, clear below.
+            let (x0, _) = at(px, 10.0, 2.0);
+            let (x1, _) = at(px, 12.0, 2.0);
+            for x in x0 + 1..x1 {
+                for y in 0..sw {
+                    assert_eq!(alpha_at(&m, x, y), 255, "{px}: bar at ({x}, {y})");
+                }
+                assert_eq!(alpha_at(&m, x, sw), 0, "{px}: under the bar at {x}");
+            }
+            // The glass bottom between view box x 6 and 10: solid in its last `sw` rows.
+            let (b0, _) = at(px, 6.0, 14.25);
+            let (b1, _) = at(px, 10.0, 14.25);
+            for x in b0..=b1 {
+                for y in px - sw..px {
+                    assert_eq!(alpha_at(&m, x, y), 255, "{px}: bottom at ({x}, {y})");
+                }
+            }
+            // Wider than before (11 of 16 columns at 16 px) and centred.
+            let cols: Vec<u32> = (0..px)
+                .filter(|&x| (0..px).any(|y| alpha_at(&m, x, y) > 128))
+                .collect();
+            let (l, r) = (cols[0], *cols.last().unwrap());
+            assert!(r - l + 1 >= px * 3 / 4, "{px}: ink {l}..{r}");
+            assert!(
+                (l as i32 - (px - 1 - r) as i32).abs() <= 1,
+                "{px}: off centre {l}..{r}"
+            );
+        }
     }
 
     #[test]
     fn warning_juice_is_red_and_the_glass_keeps_the_foreground() {
         let m = mark_pixels(IconState::Warning, true, 32).unwrap();
-        assert_eq!(rgb_at(&m, 16, 24), [0xff, 0x3b, 0x30]);
+        let (x, y) = at(32, 8.0, 12.0);
+        assert_eq!(rgb_at(&m, x, y), [0xff, 0x3b, 0x30]);
         // The straw's top bar (view box 11, 2) is the foreground, not red.
-        assert_eq!(rgb_at(&m, 22, 4), [255, 255, 255]);
+        let (x, y) = at(32, 11.0, 2.0);
+        assert_eq!(rgb_at(&m, x, y), [255, 255, 255]);
     }
 
     #[test]
@@ -280,12 +434,9 @@ mod tests {
         let normal = mark_pixels(IconState::Normal, true, 32).unwrap();
         let chg = mark_pixels(IconState::Charging, true, 32).unwrap();
         // View box (7.6, 12.2) is inside the bolt: filled in Normal, a hole in Charging.
-        assert!(alpha_at(&normal, 15, 24) > 250);
-        assert!(
-            alpha_at(&chg, 15, 24) < 40,
-            "alpha {}",
-            alpha_at(&chg, 15, 24)
-        );
+        let (x, y) = at(32, 7.6, 12.2);
+        assert!(alpha_at(&normal, x, y) > 250);
+        assert!(alpha_at(&chg, x, y) < 40, "alpha {}", alpha_at(&chg, x, y));
         let ink = |m: &Pixels| {
             m.data
                 .as_chunks::<4>()
