@@ -18,18 +18,18 @@ use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
 };
-use windows::Win32::UI::Shell::NIN_SELECT;
+use windows::Win32::UI::Shell::{NIN_SELECT, ShellExecuteW};
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowW,
-    GWLP_USERDATA, GetCursorPos, GetMessageW, GetWindowLongPtrW, GetWindowRect, KillTimer, MSG,
-    PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SetTimer,
+    GWLP_USERDATA, GetMessageW, GetWindowLongPtrW, GetWindowRect, KillTimer, MSG, PostMessageW,
+    PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SW_SHOWNORMAL, SetTimer,
     SetWindowLongPtrW, TranslateMessage, WM_APP, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE,
     WM_DPICHANGED, WM_ENDSESSION, WM_HOTKEY, WM_NCCREATE, WM_NCDESTROY, WM_SETTINGCHANGE, WM_TIMER,
     WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
-use windows::core::{PCWSTR, Result, w};
+use windows::core::{HSTRING, PCWSTR, Result, w};
 
-use juicebar_core::snapshot::Snapshot;
+use juicebar_core::snapshot::{Limits, Snapshot};
 use juicebar_core::strings::Lang;
 use juicebar_core::types::{Action, DeviceKey};
 use juicebar_hid::Transport;
@@ -37,17 +37,19 @@ use juicebar_ui::flyout::{Flyout, Handlers};
 use juicebar_ui::icon::IconLook;
 use juicebar_ui::layout::{FlyoutHit, PxRect};
 use juicebar_ui::model::UiState;
+use juicebar_ui::settings::{EditKey, UiSettings};
 use juicebar_ui::system;
 
 use crate::anim::{self, Anim, TrayHost};
 use crate::args::Args;
 use crate::controllers::Controllers;
 use crate::files::DataDir;
-use crate::live::{LightChange, Live, StartConfig};
+use crate::live::{LightChange, Live, Prefs, StartConfig};
 use crate::menu::{self, Command};
 use crate::notify::{Notice, Tracker};
 use crate::runkey;
-use crate::settings::Settings;
+use crate::settings::{LangChoice, Settings};
+use crate::settings_page::{self, Change, PageInput};
 use crate::single::{self, WINDOW_CLASS};
 use crate::source::{Clock, DemoPhase, Source};
 use crate::tray::{self, IconKey, Tray};
@@ -122,8 +124,24 @@ pub fn encode_hit(hit: FlyoutHit) -> usize {
         FlyoutHit::None => usize::MAX - 2,
         FlyoutHit::Info => usize::MAX - 3,
         FlyoutHit::Start => usize::MAX - 4,
+        FlyoutHit::Back => usize::MAX - 5,
+        FlyoutHit::Setting { id, part } => {
+            SETTING_BASE + ((usize::from(id) << 8) | usize::from(part))
+        }
+        FlyoutHit::Edit(key) => match key {
+            EditKey::Backspace => EDIT_BASE,
+            EditKey::Enter => EDIT_BASE + 1,
+            EditKey::Escape => EDIT_BASE + 2,
+            EditKey::Char(c) => EDIT_CHAR_BASE + c as usize,
+        },
     }
 }
+
+/// Hits of the Settings page ride above every device index: `SETTING_BASE + (row id << 8 | part)`.
+const SETTING_BASE: usize = 1 << 32;
+/// Keys typed into a text field: `EDIT_BASE` + 0 Backspace, 1 Enter, 2 Escape, and `EDIT_CHAR_BASE + code point`.
+const EDIT_BASE: usize = 1 << 33;
+const EDIT_CHAR_BASE: usize = 1 << 34;
 
 pub fn decode_hit(v: usize) -> FlyoutHit {
     match v {
@@ -132,6 +150,19 @@ pub fn decode_hit(v: usize) -> FlyoutHit {
         x if x == usize::MAX - 2 => FlyoutHit::None,
         x if x == usize::MAX - 3 => FlyoutHit::Info,
         x if x == usize::MAX - 4 => FlyoutHit::Start,
+        x if x == usize::MAX - 5 => FlyoutHit::Back,
+        x if x >= EDIT_CHAR_BASE => char::from_u32((x - EDIT_CHAR_BASE) as u32)
+            .map_or(FlyoutHit::None, |c| FlyoutHit::Edit(EditKey::Char(c))),
+        x if x >= EDIT_BASE => match x - EDIT_BASE {
+            0 => FlyoutHit::Edit(EditKey::Backspace),
+            1 => FlyoutHit::Edit(EditKey::Enter),
+            2 => FlyoutHit::Edit(EditKey::Escape),
+            _ => FlyoutHit::None,
+        },
+        x if x >= SETTING_BASE => FlyoutHit::Setting {
+            id: ((x - SETTING_BASE) >> 8) as u16,
+            part: ((x - SETTING_BASE) & 0xff) as u8,
+        },
         i => FlyoutHit::Row(i),
     }
 }
@@ -168,7 +199,8 @@ pub struct App {
     hwnd: Cell<HWND>,
     args: Args,
     exe: PathBuf,
-    lang: Lang,
+    /// The language of the texts: the user's choice, else Windows' (or the command line's).
+    lang: Cell<Lang>,
     msg_open: u32,
     msg_taskbar: u32,
     /// Posted by the transport's waker: events are waiting in `drain`.
@@ -200,12 +232,15 @@ pub struct App {
     info_open: Cell<bool>,
     /// The open flyout shows the first-open welcome page instead of the list.
     welcome: Cell<bool>,
+    /// The open flyout shows the Settings page instead of the list.
+    page_open: Cell<bool>,
+    /// The limit that the last change of the other one moved (its row says so until the next change).
+    adjusted: Cell<Option<crate::settings::Adjusted>>,
     hotkey_ok: Cell<bool>,
 }
 
 impl App {
     fn new(args: Args, user: &str) -> App {
-        let lang = detect_lang(args.lang.as_deref());
         let source = if args.demo {
             Source::Demo {
                 phase: DemoPhase::Scene,
@@ -215,19 +250,23 @@ impl App {
             // The live source needs the window; `init` replaces this one.
             Source::Empty
         };
-        let data = if args.is_live() {
-            args.data
-                .clone()
-                .map(DataDir::at)
-                .or_else(DataDir::from_env)
-        } else {
-            None
+        // A run with its own data folder keeps its settings there in any mode; the demo and the empty state otherwise
+        // touch no file.
+        let data = match &args.data {
+            Some(p) => Some(DataDir::at(p.clone())),
+            None if args.is_live() => DataDir::from_env(),
+            None => None,
         };
         let settings = data
             .as_ref()
             .map(|d| Settings::parse(&d.read_settings()))
             .unwrap_or_default();
-        let snapshot = source.snapshot(&Clock::now(), lang);
+        let lang = settings.language.resolve(detect_lang(args.lang.as_deref()));
+        let snapshot = source.snapshot(&Clock::now(), lang, settings.limits());
+        let mut tracker = Tracker::default();
+        tracker.set_alerts(settings.smart_warning, settings.full_notice);
+        let mut anim = Anim::new(args.anim_every.map(|s| Duration::from_secs(u64::from(s))));
+        anim.set_user_on(settings.icon_animation);
         // SAFETY: registering messages by name.
         let (msg_taskbar, msg_hid) = unsafe {
             (
@@ -240,7 +279,7 @@ impl App {
         App {
             hwnd: Cell::new(HWND::default()),
             exe: std::env::current_exe().unwrap_or_default(),
-            lang,
+            lang: Cell::new(lang),
             msg_open: single::open_message(user),
             msg_taskbar,
             msg_hid,
@@ -254,16 +293,16 @@ impl App {
             live_closed: Cell::new(false),
             applied_once: Cell::new(false),
             tray: RefCell::new(Tray::new(HWND::default(), WM_TRAY)),
-            anim: RefCell::new(Anim::new(
-                args.anim_every.map(|s| Duration::from_secs(u64::from(s))),
-            )),
+            anim: RefCell::new(anim),
             flyout: RefCell::new(None),
             source: RefCell::new(source),
             snapshot: RefCell::new(snapshot),
-            tracker: RefCell::new(Tracker::default()),
+            tracker: RefCell::new(tracker),
             expanded: RefCell::new(None),
             info_open: Cell::new(false),
             welcome: Cell::new(false),
+            page_open: Cell::new(false),
+            adjusted: Cell::new(None),
             hotkey_ok: Cell::new(false),
             args,
         }
@@ -306,9 +345,12 @@ impl App {
         if self.args.is_live() {
             self.start_live();
         }
-        let snap = self.source.borrow().snapshot(&Clock::now(), self.lang);
+        let snap = self.fresh_snapshot();
         self.apply(snap);
         trim_memory();
+        if self.args.open_settings {
+            self.open_flyout_at(None, true);
+        }
         if let Some(ms) = self.source.borrow().next_wake_ms() {
             self.wake_at(ms);
         }
@@ -342,7 +384,7 @@ impl App {
         }
         let changed = self.source.borrow_mut().advance();
         if changed {
-            let snap = self.source.borrow().snapshot(&Clock::now(), self.lang);
+            let snap = self.fresh_snapshot();
             self.apply(snap);
         }
         if let Some(ms) = self.source.borrow().next_wake_ms() {
@@ -381,7 +423,8 @@ impl App {
         let cfg = {
             let settings = self.settings.borrow();
             StartConfig {
-                lang: self.lang,
+                lang: self.lang.get(),
+                prefs: Self::prefs_of(&settings),
                 rgb_economy: settings.rgb_economy,
                 hidden: settings.hidden.clone(),
                 lights: settings.lights.clone(),
@@ -520,13 +563,14 @@ impl App {
     /// Takes a snapshot of a source that has no estimators of its own (the demo): the notices come from
     /// comparing it with the last one.
     fn apply(&self, snap: Snapshot) {
-        let notices = self.tracker.borrow_mut().observe(&snap, self.lang);
+        let notices = self.tracker.borrow_mut().observe(&snap, self.lang.get());
         self.apply_with(snap, notices);
     }
 
     /// Takes a new snapshot with the notices to show: the icon and tooltip and the open flyout are touched only
     /// when it differs from the last one (the first one always reaches the tray).
     fn apply_with(&self, snap: Snapshot, notices: Vec<Notice>) {
+        let notices = notices_to_show(self.settings.borrow().do_not_disturb, notices);
         let changed = *self.snapshot.borrow() != snap;
         if !changed && notices.is_empty() && self.applied_once.get() {
             return;
@@ -620,13 +664,49 @@ impl App {
         }
     }
 
+    /// The core's alert settings for the user's choices.
+    fn prefs_of(s: &Settings) -> Prefs {
+        Prefs {
+            limits: s.limits(),
+            low_percent: s.warn_below,
+            smart: s.smart_warning,
+            full: s.full_notice,
+        }
+    }
+
+    fn limits(&self) -> Limits {
+        self.settings.borrow().limits()
+    }
+
+    /// The source's snapshot now, with the user's limits and language.
+    fn fresh_snapshot(&self) -> Snapshot {
+        self.source
+            .borrow()
+            .snapshot(&Clock::now(), self.lang.get(), self.limits())
+    }
+
+    /// The Settings page for the user's settings.
+    fn settings_page(&self) -> UiSettings {
+        settings_page::build(&PageInput {
+            settings: &self.settings.borrow(),
+            lang: self.lang.get(),
+            autostart: runkey::is_enabled(runkey::VALUE),
+            transparency: system::transparency_enabled(),
+            hotkey: HOTKEY_TEXT,
+            hotkey_ok: self.hotkey_ok.get() || self.args.no_hotkey,
+            adjusted: self.adjusted.get(),
+        })
+    }
+
     fn ui_state(&self) -> UiState {
-        let theme = system::app_theme();
+        // The flyout's colors are the user's choice; the tray mark keeps following the taskbar.
+        let theme = self.settings.borrow().theme.resolve(system::app_theme());
         let accent = system::accent_for(theme, system::accent_color());
         let clock = Clock::now();
         let snap = self.snapshot.borrow();
         let expanded = self.expanded.borrow();
-        let empty = menu::texts(self.lang, HOTKEY_TEXT).empty;
+        let lang = self.lang.get();
+        let empty = menu::texts(lang).empty;
         // While G HUB is putting the lighting back, the footer says so on its own line, instead of fighting it.
         let conflict = self.rgb_economy.get()
             && self
@@ -634,17 +714,19 @@ impl App {
                 .borrow()
                 .live()
                 .is_some_and(|live| live.lighting_conflict());
-        let ghub_notice = conflict.then(|| view::ghub_notice(self.lang));
+        let ghub_notice = conflict.then(|| view::ghub_notice(lang));
         view::ui_state(&ViewInput {
             snapshot: &snap,
             theme,
             accent,
-            lang: self.lang,
+            lang,
             rgb_economy: self.rgb_economy.get(),
             info_open: self.info_open.get(),
             hotkey_text: HOTKEY_TEXT,
             ghub_notice,
             welcome: self.welcome.get(),
+            settings: self.page_open.get().then(|| self.settings_page()),
+            low_threshold: self.settings.borrow().warn_below,
             expanded: expanded.as_ref(),
             empty_text: &empty,
             now: clock.wall,
@@ -682,6 +764,11 @@ impl App {
     }
 
     pub fn open_flyout(&self, point: Option<POINT>) {
+        self.open_flyout_at(point, false);
+    }
+
+    /// Opens the flyout on the device list, or on the Settings page when `page`; nothing when it is open.
+    pub fn open_flyout_at(&self, point: Option<POINT>, page: bool) {
         if self.flyout_is_open() {
             return;
         }
@@ -690,9 +777,12 @@ impl App {
         self.after_live(true);
         *self.expanded.borrow_mut() = view::default_expanded(&self.snapshot.borrow());
         self.info_open.set(false);
-        // The first open of a new install shows the welcome page; it is marked seen at once, so it never nags.
+        self.page_open.set(page);
+        self.adjusted.set(None);
+        // The first open of a new install shows the welcome page (unless Settings was asked for); it is marked seen
+        // at once, so it never nags.
         let first = !self.settings.borrow().welcome_seen;
-        self.welcome.set(first);
+        self.welcome.set(first && !page);
         if first {
             self.settings.borrow_mut().welcome_seen = true;
             self.save_settings();
@@ -738,44 +828,9 @@ impl App {
 
     fn show_menu(&self, at: POINT) {
         menu::style_menus(system::app_theme() == juicebar_ui::model::Theme::Dark);
-        let choices = self
-            .source
-            .borrow_mut()
-            .live_mut()
-            .map(|l| l.devices())
-            .unwrap_or_default();
-        let items: Vec<(String, bool)> =
-            choices.iter().map(|c| (c.name.clone(), c.shown)).collect();
-        let command = menu::show(
-            self.hwnd.get(),
-            at,
-            self.lang,
-            HOTKEY_TEXT,
-            runkey::is_enabled(runkey::VALUE),
-            self.hotkey_ok.get(),
-            &items,
-        );
-        match command {
+        match menu::show(self.hwnd.get(), at, self.lang.get()) {
             Some(Command::Open) => self.open_flyout(None),
-            Some(Command::Autostart) => {
-                let on = !runkey::is_enabled(runkey::VALUE);
-                if let Err(e) = runkey::set_enabled(runkey::VALUE, &self.exe, on) {
-                    self.trace(&format!("run key failed: {e}"));
-                }
-            }
-            Some(Command::Device(i)) => {
-                if let Some(choice) = choices.get(i) {
-                    let hidden = self.source.borrow_mut().live_mut().map(|live| {
-                        live.set_shown(&choice.key, !choice.shown);
-                        live.hidden()
-                    });
-                    if let Some(hidden) = hidden {
-                        self.settings.borrow_mut().hidden = hidden;
-                        self.save_settings();
-                        self.after_live(false);
-                    }
-                }
-            }
+            Some(Command::Settings) => self.open_settings(),
             Some(Command::Quit) => {
                 // SAFETY: destroying our own window ends the loop through WM_DESTROY.
                 unsafe {
@@ -784,6 +839,140 @@ impl App {
             }
             None => {}
         }
+    }
+
+    /// The flyout on the Settings page: the open one switches to it, a closed one opens on it.
+    fn open_settings(&self) {
+        if self.flyout_is_open() {
+            self.welcome.set(false);
+            self.page_open.set(true);
+            self.adjusted.set(None);
+            self.refresh_flyout();
+        } else {
+            self.open_flyout_at(None, true);
+        }
+    }
+
+    // ---- the Settings page
+
+    /// A click or key on a row of the page.
+    fn on_setting(&self, id: u16, part: u8) {
+        let page = self.settings_page();
+        match settings_page::action(&page, id, part) {
+            Some(action) => self.apply_action(action),
+            None => self.trace(&format!("setting {id}/{part}: nothing to do")),
+        }
+    }
+
+    /// Carries out what a row asked: the new value reaches the settings file, the source and the screen at once.
+    pub fn apply_action(&self, action: Change) {
+        self.trace(&format!("setting {action:?}"));
+        let mut adjusted = None;
+        match action {
+            Change::Theme(t) => self.settings.borrow_mut().theme = t,
+            Change::IconAnimation(on) => {
+                self.settings.borrow_mut().icon_animation = on;
+                self.anim_user(on);
+            }
+            Change::Green(v) => adjusted = self.settings.borrow_mut().set_green(v),
+            Change::Red(v) => adjusted = self.settings.borrow_mut().set_red(v),
+            Change::Warn(v) => self.settings.borrow_mut().set_warn(v),
+            Change::Smart(on) => self.settings.borrow_mut().smart_warning = on,
+            Change::Full(on) => self.settings.borrow_mut().full_notice = on,
+            Change::DoNotDisturb(on) => self.settings.borrow_mut().do_not_disturb = on,
+            Change::Autostart(on) => {
+                if let Err(e) = runkey::set_enabled(runkey::VALUE, &self.exe, on) {
+                    self.trace(&format!("run key failed: {e}"));
+                }
+            }
+            Change::Language(l) => self.settings.borrow_mut().language = l,
+            Change::Open(url) => {
+                self.open_url(url);
+                return;
+            }
+        }
+        self.adjusted.set(adjusted);
+        self.save_settings();
+        match action {
+            Change::Green(_)
+            | Change::Red(_)
+            | Change::Warn(_)
+            | Change::Smart(_)
+            | Change::Full(_) => self.prefs_changed(),
+            Change::Language(l) => self.language_changed(l),
+            _ => self.refresh_flyout(),
+        }
+    }
+
+    /// The limits or the alerts changed: the source and the tray follow at once.
+    fn prefs_changed(&self) {
+        let prefs = Self::prefs_of(&self.settings.borrow());
+        if let Some(live) = self.source.borrow_mut().live_mut() {
+            live.set_prefs(prefs);
+        }
+        self.tracker
+            .borrow_mut()
+            .set_alerts(prefs.smart, prefs.full);
+        self.resnapshot();
+    }
+
+    /// The language changed: every text, the tray tooltip included, is taken again.
+    fn language_changed(&self, choice: LangChoice) {
+        let lang = choice.resolve(detect_lang(self.args.lang.as_deref()));
+        if lang == self.lang.get() {
+            self.refresh_flyout();
+            return;
+        }
+        self.lang.set(lang);
+        if let Some(live) = self.source.borrow_mut().live_mut() {
+            live.set_lang(lang);
+        }
+        self.resnapshot();
+    }
+
+    /// Takes a new snapshot (the live source when there is one) and redraws the open flyout.
+    fn resnapshot(&self) {
+        let live = self.source.borrow().live().is_some();
+        if live {
+            self.after_live(true);
+        } else {
+            let snap = self.fresh_snapshot();
+            self.apply(snap);
+        }
+        self.refresh_flyout();
+    }
+
+    /// The icon animation was switched: a run in flight stops, and no timer waits while it is off.
+    fn anim_user(&self, on: bool) {
+        let Ok(mut tray) = self.tray.try_borrow_mut() else {
+            return;
+        };
+        let mut host = TrayHost {
+            hwnd: self.hwnd.get(),
+            tray: &mut tray,
+        };
+        let event = self
+            .anim
+            .borrow_mut()
+            .set_user_enabled(&mut host, on, Instant::now());
+        self.trace_anim(event);
+    }
+
+    /// Opens a web page (or a Windows settings page) in its default app.
+    fn open_url(&self, url: &str) {
+        self.trace(&format!("open {url}"));
+        let target = HSTRING::from(url);
+        // SAFETY: both strings live through the call; the shell starts the default handler on its own.
+        let _ = unsafe {
+            ShellExecuteW(
+                None,
+                w!("open"),
+                &target,
+                PCWSTR::null(),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            )
+        };
     }
 
     fn on_flyout_hit(&self, hit: FlyoutHit) {
@@ -815,12 +1004,15 @@ impl App {
                 self.welcome.set(false);
                 self.refresh_flyout();
             }
-            FlyoutHit::Gear => {
-                let mut p = POINT::default();
-                // SAFETY: a valid out pointer.
-                let _ = unsafe { GetCursorPos(&mut p) };
-                self.show_menu(p);
+            FlyoutHit::Gear => self.open_settings(),
+            FlyoutHit::Back => {
+                self.page_open.set(false);
+                self.adjusted.set(None);
+                self.refresh_flyout();
             }
+            FlyoutHit::Setting { id, part } => self.on_setting(id, part),
+            // Keys of a text field being edited: the Devices section (rename) takes them.
+            FlyoutHit::Edit(_) => {}
             FlyoutHit::None => {}
         }
     }
@@ -929,6 +1121,11 @@ impl App {
         }
         Some(LRESULT(0))
     }
+}
+
+/// The balloons to show: none while do-not-disturb is on (the icon still changes).
+pub fn notices_to_show(do_not_disturb: bool, notices: Vec<Notice>) -> Vec<Notice> {
+    if do_not_disturb { Vec::new() } else { notices }
 }
 
 fn post(hwnd: HWND, msg: u32, wparam: usize) {
@@ -1110,10 +1307,38 @@ mod tests {
             FlyoutHit::RgbSwitch,
             FlyoutHit::Info,
             FlyoutHit::Start,
+            FlyoutHit::Back,
             FlyoutHit::None,
+            FlyoutHit::Setting { id: 1, part: 0 },
+            FlyoutHit::Setting { id: 16, part: 5 },
+            FlyoutHit::Setting {
+                id: u16::MAX,
+                part: u8::MAX,
+            },
+            FlyoutHit::Edit(EditKey::Backspace),
+            FlyoutHit::Edit(EditKey::Enter),
+            FlyoutHit::Edit(EditKey::Escape),
+            FlyoutHit::Edit(EditKey::Char('a')),
+            FlyoutHit::Edit(EditKey::Char('ç')),
+            FlyoutHit::Edit(EditKey::Char('\u{10ffff}')),
         ] {
-            assert_eq!(decode_hit(encode_hit(hit)), hit);
+            assert_eq!(decode_hit(encode_hit(hit)), hit, "{hit:?}");
         }
+        // No device index is ever mistaken for a settings hit.
+        assert_eq!(decode_hit(7), FlyoutHit::Row(7));
+        assert_eq!(decode_hit((1 << 32) - 1), FlyoutHit::Row((1 << 32) - 1));
+    }
+
+    #[test]
+    fn do_not_disturb_drops_every_balloon_and_otherwise_none() {
+        let n = |t: &str| Notice {
+            title: t.into(),
+            body: String::new(),
+        };
+        let list = vec![n("a"), n("b")];
+        assert!(notices_to_show(true, list.clone()).is_empty());
+        assert_eq!(notices_to_show(false, list.clone()), list);
+        assert!(notices_to_show(true, Vec::new()).is_empty());
     }
 
     #[test]

@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Maps the core's `Snapshot` onto the flyout's `UiState`. Pure: no Win32, so it is unit tested.
 
-use juicebar_core::estimator::LOW_PERCENT;
 use juicebar_core::snapshot::{self, DeviceView, Snapshot};
 use juicebar_core::strings::{self, Lang, id};
 use juicebar_core::types::{DeviceKey, Kind};
 use juicebar_ui::icon::{IconLook, Juice};
 use juicebar_ui::model::{Glyph, IconState, Rgb, Theme, UiDevice, UiLabels, UiState, UiWelcome};
+use juicebar_ui::settings::UiSettings;
 
 /// Everything besides the snapshot that the flyout depends on.
 pub struct ViewInput<'a> {
@@ -23,6 +23,10 @@ pub struct ViewInput<'a> {
     pub ghub_notice: Option<&'a str>,
     /// Show the first-open page instead of the list.
     pub welcome: bool,
+    /// The Settings page, shown instead of the list (the welcome page wins when both are asked).
+    pub settings: Option<UiSettings>,
+    /// At or below this percent a device is drawn red (the user's low-battery level).
+    pub low_threshold: u8,
     /// The device whose detail card is open.
     pub expanded: Option<&'a DeviceKey>,
     /// The text for an empty device list.
@@ -184,12 +188,13 @@ pub fn ui_state(v: &ViewInput<'_>) -> UiState {
         ghub_notice: v.ghub_notice.map(str::to_string),
         alert: icon_state(v.snapshot.icon),
         juice: icon_look(v.snapshot.icon).juice,
-        low_threshold: LOW_PERCENT as u8,
+        low_threshold: v.low_threshold,
         day_labels: day_labels(v.now, v.utc_offset, v.lang),
         usage_labels: usage_labels(v.now, v.utc_offset, v.lang),
         empty_text: v.empty_text.to_string(),
         labels: labels(v.lang),
         welcome: v.welcome.then(|| welcome(v.lang)),
+        settings: v.settings.clone(),
     }
 }
 
@@ -262,6 +267,8 @@ mod tests {
             hotkey_text: "Ctrl+Alt+B",
             ghub_notice: None,
             welcome: false,
+            settings: None,
+            low_threshold: 10,
             expanded: exp,
             empty_text: "vazio",
             now: DEMO_NOW,
@@ -474,6 +481,23 @@ mod tests {
             pt.tray_steps
                 .contains("Configurações > Personalização > Barra de tarefas")
         );
+    }
+
+    #[test]
+    fn the_low_level_the_user_set_colors_the_cards_and_the_page_rides_along() {
+        let snap = demo_snapshot(DemoPhase::Scene, &clock(), Lang::PtBr);
+        let mut v = input(&snap, Lang::PtBr, None);
+        assert!(ui_state(&v).settings.is_none());
+        assert_eq!(ui_state(&v).low_threshold, 10);
+        v.low_threshold = 25;
+        v.settings = Some(UiSettings::new("Configurações", vec![]));
+        let ui = ui_state(&v);
+        assert_eq!(ui.low_threshold, 25);
+        assert!(
+            ui.is_low(ui.devices.iter().find(|d| d.name == "G703").unwrap()),
+            "23 is under 25"
+        );
+        assert_eq!(ui.settings.unwrap().title, "Configurações");
     }
 
     #[test]

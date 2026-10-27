@@ -26,6 +26,8 @@ pub struct Args {
     pub anim_every: Option<u32>,
     /// Do not register the Ctrl+Alt+B hotkey (a test instance beside the owner's own).
     pub no_hotkey: bool,
+    /// Open the flyout on the Settings page as soon as the icon is up (captures).
+    pub open_settings: bool,
 }
 
 impl Args {
@@ -52,6 +54,7 @@ impl Args {
                 "--empty" => a.empty = true,
                 "--anim-every" => a.anim_every = it.next().and_then(|v| v.parse().ok()),
                 "--no-hotkey" => a.no_hotkey = true,
+                "--open-settings" => a.open_settings = true,
                 _ => {}
             }
         }
@@ -99,6 +102,12 @@ mod tests {
         assert_eq!(plain.anim_every, None);
         assert!(!plain.no_hotkey);
         assert_eq!(parse("--anim-every soon").anim_every, None);
+    }
+
+    #[test]
+    fn the_capture_flag_for_the_settings_page_parses() {
+        assert!(parse("--demo --open-settings").open_settings);
+        assert!(!parse("--demo").open_settings);
     }
 
     #[test]

@@ -12,5 +12,8 @@ pub mod icon;
 pub mod layout;
 pub mod model;
 pub mod render;
+pub mod settings;
+pub mod settings_draw;
+pub mod settings_layout;
 pub mod svgpath;
 pub mod system;

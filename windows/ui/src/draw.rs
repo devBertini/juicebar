@@ -160,6 +160,8 @@ pub struct PaintOptions {
     pub clear: Option<Color>,
     /// The control under the pointer.
     pub hover: FlyoutHit,
+    /// How far the Settings page is scrolled, in DIPs (0 for every other page).
+    pub scroll: f32,
 }
 
 struct Fonts {
@@ -216,7 +218,13 @@ pub fn measure_metrics(g: &Gfx, state: &UiState) -> Result<Metrics> {
         ),
         None => (d.welcome_body_h, d.welcome_steps_h),
     };
+    let settings = match &state.settings {
+        Some(ui) => crate::settings_draw::measure_settings(g, ui)?,
+        None => d.settings.clone(),
+    };
     Ok(Metrics {
+        settings,
+        max_height: d.max_height,
         rgb_label_w: g.measure(&state.labels.rgb_economy, &f.rgb)?.0.ceil(),
         hotkey_w: g.measure(&state.hotkey_text, &f.kbd)?.0.ceil(),
         info_h: g
@@ -302,6 +310,18 @@ pub fn paint_flyout(
     }
     if let (Some(w), Some(page)) = (&layout.welcome, &state.welcome) {
         return paint_welcome(c, state, &p, &f, w, page, opts.hover);
+    }
+    if let (Some(g), Some(ui)) = (&layout.settings, &state.settings) {
+        return crate::settings_draw::paint_settings(
+            c,
+            state,
+            ui,
+            g,
+            &p,
+            opts.hover,
+            opts.scroll,
+            layout.height,
+        );
     }
 
     // Header.
@@ -420,7 +440,7 @@ fn paint_footer(
     )?;
     let info_on = hover == FlyoutHit::Info || state.info_open;
     paint_info_icon(c, p, ft.info, info_on);
-    paint_switch(c, p, ft.switch, state.rgb_economy);
+    paint_switch(c, p, ft.switch, state.rgb_economy, 1.0);
     c.fill_rrect(ft.hotkey, 4.0, p.tile);
     c.stroke_rrect(ft.hotkey, 4.0, c.hairline(), p.stroke);
     c.text_in(&state.hotkey_text, &f.kbd, ft.hotkey, Align::Center, p.fg2)?;
@@ -480,14 +500,15 @@ fn paint_info_bubble(
     Ok(())
 }
 
-fn paint_switch(c: &Canvas, p: &Palette, r: Rect, on: bool) {
+/// The 40 x 20 switch; `quiet` (1.0 normal) fades a disabled one.
+pub(crate) fn paint_switch(c: &Canvas, p: &Palette, r: Rect, on: bool, quiet: f32) {
     let knob_y = r.cy();
     if on {
-        c.fill_rrect(r, r.h / 2.0, p.accent);
-        c.fill_circle(r.x + 30.0, knob_y, 6.0, p.on(p.accent));
+        c.fill_rrect(r, r.h / 2.0, p.accent.fade(quiet));
+        c.fill_circle(r.x + 30.0, knob_y, 6.0, p.on(p.accent).fade(quiet));
     } else {
-        c.stroke_rrect(r, r.h / 2.0, 1.0, p.fg2);
-        c.fill_circle(r.x + 10.0, knob_y, 6.0, p.fg2);
+        c.stroke_rrect(r, r.h / 2.0, 1.0, p.fg2.fade(quiet));
+        c.fill_circle(r.x + 10.0, knob_y, 6.0, p.fg2.fade(quiet));
     }
 }
 

@@ -21,7 +21,7 @@ use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection,
     DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint, GetMonitorInfoW, HBITMAP, HDC, HGDIOBJ,
     HMONITOR, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect, PAINTSTRUCT,
-    SRCCOPY, SelectObject, UpdateWindow,
+    SRCCOPY, ScreenToClient, SelectObject, UpdateWindow,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::MARGINS;
@@ -30,21 +30,27 @@ use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_ESCAPE,
+    GetKeyState, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_BACK, VK_DOWN, VK_ESCAPE, VK_LEFT,
+    VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
+    CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetCursorPos,
     GetWindowLongPtrW, IDC_ARROW, IsWindow, LoadCursorW, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE,
     SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_INACTIVE,
-    WM_ACTIVATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
-    WM_NCDESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_ACTIVATE, WM_CHAR, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Error, PCWSTR, Result, w};
 
 use crate::draw::{PaintOptions, measure_metrics, paint_flyout};
 use crate::gfx::{Gfx, render_offscreen_into};
-use crate::layout::{FlyoutHit, Layout, PxRect, place, scale_from_dpi, size_px};
+use crate::layout::{
+    EDGE_MARGIN, FlyoutHit, Layout, Metrics, PxRect, place, scale_from_dpi, size_px,
+};
 use crate::model::{Theme, UiState};
+use crate::settings::{EditKey, NavKey};
+use crate::settings_layout::WHEEL_STEP;
 
 /// Callbacks of a shown flyout. Both run on the UI thread, inside the window's message handling;
 /// neither may block.
@@ -71,6 +77,8 @@ struct Inner {
     /// Where the flyout was anchored (the tray icon), to place it again when its height changes.
     anchor: PxRect,
     hover: Cell<FlyoutHit>,
+    /// How far the Settings page is scrolled, in DIPs.
+    scroll: Cell<f32>,
     tracking: Cell<bool>,
     /// Hide when another window takes the focus (the default); tests and captures turn it off.
     hide_on_deactivate: Cell<bool>,
@@ -214,7 +222,7 @@ impl Flyout {
         ensure_dpi_awareness();
         let gfx = Gfx::new()?;
         let (_, work, scale) = monitor_of(anchor);
-        let metrics = measure_metrics(&gfx, &state)?;
+        let metrics = metrics_for(&gfx, &state, work, scale)?;
         let layout = Layout::compute(&state, metrics);
         let (w, h) = size_px(layout.width, layout.height, scale);
         let (x, y) = place(anchor, w, h, work, scale);
@@ -227,6 +235,7 @@ impl Flyout {
             scale: Cell::new(scale),
             anchor,
             hover: Cell::new(FlyoutHit::None),
+            scroll: Cell::new(0.0),
             tracking: Cell::new(false),
             hide_on_deactivate: Cell::new(true),
             backdrop: Cell::new(false),
@@ -316,8 +325,23 @@ impl Flyout {
             return Ok(());
         }
         let inner = &self.inner;
-        let metrics = measure_metrics(&inner.gfx, &state)?;
+        let mut state = state;
+        let (_, work, _) = monitor_of(inner.anchor);
+        let metrics = metrics_for(&inner.gfx, &state, work, inner.scale.get())?;
+        // The window keeps the keyboard focus and the scroll of the Settings page across the app's updates.
+        match (&inner.state.borrow().settings, &mut state.settings) {
+            (Some(old), Some(new)) => {
+                if new.focus.is_none() {
+                    new.focus = old.focus.filter(|id| new.focusable().contains(id));
+                }
+            }
+            _ => inner.scroll.set(0.0),
+        }
         let layout = Layout::compute(&state, metrics);
+        match &layout.settings {
+            Some(g) => inner.scroll.set(g.clamp_scroll(inner.scroll.get())),
+            None => inner.scroll.set(0.0),
+        }
         let (w, h) = size_px(layout.width, layout.height, inner.scale.get());
         let resized = {
             let old = inner.layout.borrow();
@@ -357,6 +381,13 @@ fn set_cloak(hwnd: HWND, cloak: bool) {
     let v: i32 = cloak as i32;
     // SAFETY: a 4-byte BOOL that outlives the call; failure only leaves the window uncloaked.
     let _ = unsafe { DwmSetWindowAttribute(hwnd, DWMWA_CLOAK, &v as *const i32 as *const _, 4) };
+}
+
+/// The measured texts for `state`, with the Settings page capped to the work area (minus the margins).
+fn metrics_for(gfx: &Gfx, state: &UiState, work: PxRect, scale: f32) -> Result<Metrics> {
+    let mut m = measure_metrics(gfx, state)?;
+    m.max_height = (work.bottom - work.top) as f32 / scale - 2.0 * EDGE_MARGIN;
+    Ok(m)
 }
 
 fn module_instance() -> Option<HINSTANCE> {
@@ -483,6 +514,7 @@ impl Inner {
                     solid_panel: !self.backdrop.get(),
                     clear: None,
                     hover: self.hover.get(),
+                    scroll: self.scroll.get(),
                 },
             )
         })?;
@@ -522,8 +554,151 @@ impl Inner {
 
     fn hit_at(&self, x_px: i32, y_px: i32) -> FlyoutHit {
         let s = self.scale.get();
-        self.layout.borrow().hit(x_px as f32 / s, y_px as f32 / s)
+        self.layout
+            .borrow()
+            .hit_scrolled(x_px as f32 / s, y_px as f32 / s, self.scroll.get())
     }
+
+    /// Runs the app's click callback; no borrow is held, so it may call `update` or `hide`.
+    fn emit(&self, hit: FlyoutHit) {
+        let mut cb = std::mem::replace(&mut self.handlers.borrow_mut().on_hit, Box::new(|_| {}));
+        cb(hit);
+        self.handlers.borrow_mut().on_hit = cb;
+    }
+
+    /// The hover under the pointer after the page moved beneath it.
+    fn rehover(&self, hwnd: HWND) {
+        let mut p = windows::Win32::Foundation::POINT::default();
+        // SAFETY: valid out pointers; the window is ours.
+        let ok = unsafe { GetCursorPos(&mut p).is_ok() && ScreenToClient(hwnd, &mut p).as_bool() };
+        let hit = if ok {
+            self.hit_at(p.x, p.y)
+        } else {
+            FlyoutHit::None
+        };
+        self.hover.set(hit);
+    }
+
+    /// Scrolls the Settings page by `delta` DIPs; true when it moved.
+    fn scroll_by(&self, delta: f32) -> bool {
+        let max = self
+            .layout
+            .borrow()
+            .settings
+            .as_ref()
+            .map_or(0.0, |g| g.max_scroll());
+        let now = self.scroll.get();
+        let next = (now + delta).clamp(0.0, max);
+        if (next - now).abs() < 0.01 {
+            return false;
+        }
+        self.scroll.set(next);
+        true
+    }
+
+    /// A key pressed while the flyout has the focus.
+    fn key_down(&self, vk: u16) -> Key {
+        let (page, editing) = {
+            let st = self.state.borrow();
+            (
+                st.settings.is_some(),
+                st.settings.as_ref().is_some_and(|s| s.editing()),
+            )
+        };
+        if vk == VK_ESCAPE.0 {
+            return if editing {
+                Key::Hit(FlyoutHit::Edit(EditKey::Escape))
+            } else if page {
+                Key::Hit(FlyoutHit::Back)
+            } else {
+                Key::Close
+            };
+        }
+        if !page {
+            return Key::Pass;
+        }
+        if editing {
+            return match vk {
+                v if v == VK_BACK.0 => Key::Hit(FlyoutHit::Edit(EditKey::Backspace)),
+                v if v == VK_RETURN.0 => Key::Hit(FlyoutHit::Edit(EditKey::Enter)),
+                _ => Key::Handled,
+            };
+        }
+        // SAFETY: a plain key-state query.
+        let shift = unsafe { GetKeyState(i32::from(VK_SHIFT.0)) } < 0;
+        let nav = match vk {
+            v if v == VK_TAB.0 && shift => NavKey::ShiftTab,
+            v if v == VK_TAB.0 => NavKey::Tab,
+            v if v == VK_UP.0 => NavKey::Up,
+            v if v == VK_DOWN.0 => NavKey::Down,
+            v if v == VK_LEFT.0 => NavKey::Left,
+            v if v == VK_RIGHT.0 => NavKey::Right,
+            v if v == VK_SPACE.0 => NavKey::Space,
+            v if v == VK_RETURN.0 => NavKey::Enter,
+            _ => return Key::Pass,
+        };
+        self.nav(nav)
+    }
+
+    /// A navigation key on the Settings page: moves the focus (and the scroll, to keep it in view) or acts.
+    fn nav(&self, key: NavKey) -> Key {
+        match key {
+            NavKey::Tab | NavKey::Down | NavKey::ShiftTab | NavKey::Up => {
+                let forward = matches!(key, NavKey::Tab | NavKey::Down);
+                let focus = self
+                    .state
+                    .borrow_mut()
+                    .settings
+                    .as_mut()
+                    .and_then(|s| s.move_focus(forward));
+                if let Some(id) = focus {
+                    let reveal = self
+                        .layout
+                        .borrow()
+                        .settings
+                        .as_ref()
+                        .map(|g| g.scroll_to_reveal(id, self.scroll.get()));
+                    if let Some(s) = reveal {
+                        self.scroll.set(s);
+                    }
+                    self.rehover_quietly();
+                    self.redraw_quietly();
+                }
+                Key::Handled
+            }
+            _ => {
+                let act = self
+                    .state
+                    .borrow()
+                    .settings
+                    .as_ref()
+                    .and_then(|s| s.activate(key));
+                match act {
+                    Some((id, part)) => Key::Hit(FlyoutHit::Setting { id, part }),
+                    None => Key::Handled,
+                }
+            }
+        }
+    }
+
+    fn rehover_quietly(&self) {
+        let hwnd = self.hwnd.get();
+        if !hwnd.is_invalid() {
+            self.rehover(hwnd);
+        }
+    }
+}
+
+/// What a key press does to the flyout.
+enum Key {
+    /// Destroy the window (Esc on the list).
+    Close,
+    /// Tell the app, as a click would.
+    Hit(FlyoutHit),
+    /// Used here (the focus moved, or nothing to do).
+    Handled,
+    /// Not ours: the system's default handling.
+    Pass,
 }
 
 /// # Safety
@@ -560,10 +735,39 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             return LRESULT(0);
         }
-        WM_KEYDOWN if wparam.0 as u16 == VK_ESCAPE.0 => {
-            // SAFETY: as above.
-            unsafe {
-                let _ = DestroyWindow(hwnd);
+        WM_KEYDOWN => match inner.key_down(wparam.0 as u16) {
+            Key::Close => {
+                // SAFETY: as above.
+                unsafe {
+                    let _ = DestroyWindow(hwnd);
+                }
+                return LRESULT(0);
+            }
+            Key::Hit(hit) => {
+                inner.emit(hit);
+                return LRESULT(0);
+            }
+            Key::Handled => return LRESULT(0),
+            Key::Pass => {}
+        },
+        WM_CHAR => {
+            let editing = inner
+                .state
+                .borrow()
+                .settings
+                .as_ref()
+                .is_some_and(|s| s.editing());
+            if editing && let Some(ch) = char::from_u32(wparam.0 as u32).filter(|c| !c.is_control())
+            {
+                inner.emit(FlyoutHit::Edit(EditKey::Char(ch)));
+            }
+            return LRESULT(0);
+        }
+        WM_MOUSEWHEEL => {
+            let notches = f32::from(((wparam.0 >> 16) & 0xffff) as u16 as i16) / 120.0;
+            if inner.scroll_by(-notches * WHEEL_STEP) {
+                inner.rehover(hwnd);
+                inner.redraw_quietly();
             }
             return LRESULT(0);
         }
@@ -599,11 +803,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_LBUTTONUP => {
             let (x, y) = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
             let hit = inner.hit_at(x, y);
-            // No borrow is held while the callback runs, so it may call `update` or `hide`.
-            let mut cb =
-                std::mem::replace(&mut inner.handlers.borrow_mut().on_hit, Box::new(|_| {}));
-            cb(hit);
-            inner.handlers.borrow_mut().on_hit = cb;
+            // A click ends the keyboard's focus ring.
+            if let Some(ui) = inner.state.borrow_mut().settings.as_mut() {
+                ui.focus = None;
+            }
+            inner.emit(hit);
             return LRESULT(0);
         }
         WM_DESTROY => {
@@ -746,6 +950,194 @@ mod tests {
         f.update(UiState::sample_welcome(Theme::Dark)).unwrap();
         let page = f.rect().unwrap();
         assert!(page.bottom <= work.bottom && page.top >= work.top);
+    }
+
+    fn open_page(state: UiState, hits: Rc<RefCell<Vec<FlyoutHit>>>) -> Flyout {
+        let handlers = Handlers {
+            on_hit: Box::new(move |h| hits.borrow_mut().push(h)),
+            on_close: Box::new(|| {}),
+        };
+        let anchor = PxRect {
+            left: 1000,
+            top: 1050,
+            right: 1024,
+            bottom: 1080,
+        };
+        let f = Flyout::show(state, anchor, handlers).expect("flyout opens");
+        f.set_hide_on_deactivate(false);
+        f
+    }
+
+    fn key(hwnd: HWND, vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) {
+        // SAFETY: sending a message to our own window on this thread.
+        unsafe {
+            SendMessageW(
+                hwnd,
+                WM_KEYDOWN,
+                Some(WPARAM(vk.0 as usize)),
+                Some(LPARAM(0)),
+            )
+        };
+    }
+
+    #[test]
+    fn the_settings_page_takes_the_keys_the_wheel_and_the_clicks() {
+        use crate::settings::{PART_MINUS, PART_PLUS, PART_ROW};
+        use windows::Win32::UI::WindowsAndMessaging::WM_MOUSEWHEEL;
+        let hits = Rc::new(RefCell::new(Vec::new()));
+        let f = open_page(UiState::sample_settings(Theme::Dark), hits.clone());
+        let hwnd = f.hwnd();
+        let focus = |f: &Flyout| f.inner.state.borrow().settings.as_ref().unwrap().focus;
+        assert_eq!(focus(&f), None);
+
+        // Tab walks the controls; Down is the same; the focus ring is drawn from the state.
+        key(hwnd, VK_TAB);
+        assert_eq!(focus(&f), Some(1));
+        key(hwnd, VK_DOWN);
+        assert_eq!(focus(&f), Some(2));
+        assert!(
+            hits.borrow().is_empty(),
+            "moving the focus asks the app nothing"
+        );
+
+        // Space flips the toggle under the focus; Left turns an "on" toggle off; Right does nothing.
+        key(hwnd, VK_SPACE);
+        key(hwnd, VK_LEFT);
+        key(hwnd, VK_RIGHT);
+        let row_hit = FlyoutHit::Setting {
+            id: 2,
+            part: PART_ROW,
+        };
+        assert_eq!(*hits.borrow(), vec![row_hit, row_hit]);
+        hits.borrow_mut().clear();
+
+        // Two more Tabs reach the first stepper; Right presses its plus, Left its minus.
+        key(hwnd, VK_TAB);
+        key(hwnd, VK_TAB);
+        assert_eq!(focus(&f), Some(4));
+        key(hwnd, VK_RIGHT);
+        key(hwnd, VK_LEFT);
+        assert_eq!(
+            *hits.borrow(),
+            vec![
+                FlyoutHit::Setting {
+                    id: 4,
+                    part: PART_PLUS
+                },
+                FlyoutHit::Setting {
+                    id: 4,
+                    part: PART_MINUS
+                }
+            ]
+        );
+        hits.borrow_mut().clear();
+
+        // The app's update keeps the focus the window owns.
+        f.update(UiState::sample_settings(Theme::Dark)).unwrap();
+        assert_eq!(focus(&f), Some(4));
+        // A click ends the focus ring and is reported where it landed.
+        let layout = f.inner.layout.borrow().clone();
+        let s = f.inner.scale.get();
+        let row = layout.settings.as_ref().unwrap().row(4).unwrap().clone();
+        let (px, py) = (
+            ((row.plus.x + row.plus.w / 2.0) * s) as i32,
+            (row.plus.cy() * s) as i32,
+        );
+        // SAFETY: sending a message to our own window on this thread.
+        unsafe { SendMessageW(hwnd, WM_LBUTTONUP, Some(WPARAM(0)), Some(lparam(px, py))) };
+        assert_eq!(
+            *hits.borrow(),
+            vec![FlyoutHit::Setting {
+                id: 4,
+                part: PART_PLUS
+            }]
+        );
+        assert_eq!(focus(&f), None);
+        hits.borrow_mut().clear();
+
+        // The wheel scrolls a page taller than the window, never past either end; the window stays within the work area.
+        let g = layout.settings.clone().unwrap();
+        let (_, work, _) = monitor_of(f.inner.anchor);
+        let r = f.rect().unwrap();
+        assert!(r.bottom - r.top <= work.bottom - work.top);
+        let down = ((-120i16) as u16 as usize) << 16;
+        let up = 120usize << 16;
+        let wheel = |w: usize| {
+            // SAFETY: sending a message to our own window on this thread.
+            unsafe { SendMessageW(hwnd, WM_MOUSEWHEEL, Some(WPARAM(w)), Some(LPARAM(0))) };
+        };
+        wheel(down);
+        assert_eq!(f.inner.scroll.get(), 48.0_f32.min(g.max_scroll()));
+        for _ in 0..200 {
+            wheel(down);
+        }
+        assert_eq!(f.inner.scroll.get(), g.max_scroll());
+        for _ in 0..400 {
+            wheel(up);
+        }
+        assert_eq!(f.inner.scroll.get(), 0.0);
+
+        // Tabbing to a row below the fold scrolls it into view.
+        let last = layout.settings.as_ref().unwrap().row(15).unwrap().clone();
+        for _ in 0..30 {
+            key(hwnd, VK_TAB);
+            if focus(&f) == Some(15) {
+                break;
+            }
+        }
+        assert_eq!(focus(&f), Some(15));
+        let sy = last.bounds.bottom() - f.inner.scroll.get();
+        assert!(
+            sy <= g.height,
+            "the focused row is on screen: {sy} of {}",
+            g.height
+        );
+
+        // Esc leaves the page (the app answers by showing the list); on the list it closes the window.
+        key(hwnd, VK_ESCAPE);
+        assert_eq!(*hits.borrow(), vec![FlyoutHit::Back]);
+        assert!(f.is_open());
+        f.update(UiState::sample_collapsed(Theme::Dark)).unwrap();
+        assert_eq!(f.inner.scroll.get(), 0.0, "the list does not scroll");
+        key(hwnd, VK_ESCAPE);
+        assert!(!f.is_open());
+    }
+
+    #[test]
+    fn a_text_field_being_edited_gets_the_characters_and_escape_only_cancels_the_edit() {
+        use crate::settings::{EditKey, SettingsRow, SettingsSection, UiSettings};
+        use windows::Win32::UI::WindowsAndMessaging::WM_CHAR;
+        let mut state = UiState::sample_settings(Theme::Light);
+        state.settings = Some(UiSettings::new(
+            "Configurações",
+            vec![SettingsSection::new(
+                "Nome",
+                vec![SettingsRow::text(1, "Nome", "G7", true)],
+            )],
+        ));
+        let hits = Rc::new(RefCell::new(Vec::new()));
+        let f = open_page(state, hits.clone());
+        let hwnd = f.hwnd();
+        // SAFETY: sending messages to our own window on this thread.
+        unsafe {
+            SendMessageW(hwnd, WM_CHAR, Some(WPARAM(0x30)), Some(LPARAM(0)));
+            SendMessageW(hwnd, WM_CHAR, Some(WPARAM(0x08)), Some(LPARAM(0)));
+        }
+        key(hwnd, VK_BACK);
+        key(hwnd, VK_RETURN);
+        key(hwnd, VK_TAB);
+        key(hwnd, VK_ESCAPE);
+        assert_eq!(
+            *hits.borrow(),
+            vec![
+                FlyoutHit::Edit(EditKey::Char('0')),
+                FlyoutHit::Edit(EditKey::Backspace),
+                FlyoutHit::Edit(EditKey::Enter),
+                FlyoutHit::Edit(EditKey::Escape),
+            ],
+            "the backspace control character is not text, Tab does nothing, Escape is the edit's"
+        );
+        assert!(f.is_open());
     }
 
     #[test]

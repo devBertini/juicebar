@@ -6,6 +6,7 @@
 //! `UiState::sample()` is the Windows scene of the design mockup (`docs/design/options/1-native`).
 
 use crate::icon::Juice;
+use crate::settings::{SettingsRow, SettingsSection, UiSettings};
 
 /// Light or dark appearance of the flyout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,6 +177,8 @@ pub struct UiState {
     pub labels: UiLabels,
     /// The first-open page; while `Some`, it is drawn instead of the list and the footer.
     pub welcome: Option<UiWelcome>,
+    /// The Settings page; while `Some` (and no welcome), it is drawn instead of the list and the footer.
+    pub settings: Option<UiSettings>,
 }
 
 impl UiState {
@@ -305,6 +308,7 @@ impl UiState {
             empty_text: String::new(),
             labels: UiLabels::default(),
             welcome: None,
+            settings: None,
         }
     }
 
@@ -332,6 +336,14 @@ impl UiState {
         s
     }
 
+    /// The Settings page with every kind of row, as the app fills it (Brazilian Portuguese).
+    pub fn sample_settings(theme: Theme) -> UiState {
+        let mut s = UiState::sample(theme);
+        s.juice = Juice::Purple;
+        s.settings = Some(sample_settings_page());
+        s
+    }
+
     /// The first-open page.
     pub fn sample_welcome(theme: Theme) -> UiState {
         let mut s = UiState::sample(theme);
@@ -339,6 +351,78 @@ impl UiState {
         s.welcome = Some(UiWelcome::default());
         s
     }
+}
+
+/// The Settings page of the drawings and tests: the app's sections and rows, with their texts in Portuguese.
+pub fn sample_settings_page() -> UiSettings {
+    UiSettings::new(
+        "Configurações",
+        vec![
+            SettingsSection::new(
+                "Aparência",
+                vec![
+                    SettingsRow::choice(1, "Tema", &["Automático", "Claro", "Escuro"], 0),
+                    SettingsRow::toggle(2, "Animação do ícone", true)
+                        .with_detail("O suco se mexe de vez em quando"),
+                    SettingsRow::link(
+                        3,
+                        "Ative os efeitos de transparência do Windows para o fundo translúcido",
+                        "Abrir",
+                    ),
+                ],
+            ),
+            SettingsSection::new(
+                "Ícone",
+                vec![
+                    SettingsRow::stepper(4, "Verde quando todos acima de", 50, (25, 95, 5), "50%"),
+                    SettingsRow::stepper(
+                        5,
+                        "Vermelho quando algum abaixo de",
+                        20,
+                        (5, 50, 5),
+                        "20%",
+                    ),
+                ],
+            ),
+            SettingsSection::new(
+                "Alertas",
+                vec![
+                    SettingsRow::stepper(6, "Avisar com bateria abaixo de", 10, (5, 30, 5), "10%"),
+                    SettingsRow::toggle(7, "Aviso inteligente", true)
+                        .with_detail("Quando um dispositivo não vai durar o dia"),
+                    SettingsRow::toggle(8, "Carga completa", true)
+                        .with_detail("Avisar quando um dispositivo terminar de carregar"),
+                    SettingsRow::toggle(9, "Não perturbe", false)
+                        .with_detail("Sem notificações; o ícone continua mudando"),
+                ],
+            ),
+            SettingsSection::new(
+                "Geral",
+                vec![
+                    SettingsRow::toggle(10, "Iniciar com o Windows", true),
+                    SettingsRow::choice(11, "Idioma", &["Automático", "Português", "English"], 0),
+                    SettingsRow::value(12, "Atalho", "Ctrl+Alt+B")
+                        .with_detail("Abre o JuiceBar de qualquer lugar"),
+                ],
+            ),
+            SettingsSection::new(
+                "Sobre",
+                vec![
+                    SettingsRow::identity(
+                        13,
+                        "JuiceBar",
+                        "Versão 0.1.0",
+                        "Idealizado por Claudio Bertini",
+                        "devBertini",
+                    ),
+                    SettingsRow::link(14, "Código no GitHub", ""),
+                    SettingsRow::link(15, "Licença GPL-3.0", "")
+                        .with_detail("Software livre: use, estude, compartilhe e altere"),
+                    SettingsRow::note(16, "Sem rede, sem telemetria: tudo fica neste computador"),
+                ],
+            ),
+        ],
+    )
 }
 
 /// Port of the mockup's `build()` in `docs/design/harness/sample-state.js`: one point per hour
@@ -445,6 +529,21 @@ mod tests {
             w.devices.len() == 4,
             "the list stays for the page behind it"
         );
+        let p = UiState::sample_settings(Theme::Light);
+        assert!(p.settings.is_some() && p.welcome.is_none());
+    }
+
+    #[test]
+    fn the_sample_settings_page_has_unique_ids_and_a_focusable_control_in_each_section() {
+        let page = sample_settings_page();
+        let mut ids: Vec<u16> = page.rows().map(|r| r.id).collect();
+        let n = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), n);
+        for s in &page.sections {
+            assert!(s.rows.iter().any(|r| r.focusable()), "{}", s.title);
+        }
     }
 
     #[test]

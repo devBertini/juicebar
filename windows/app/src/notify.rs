@@ -26,6 +26,10 @@ struct Seen {
 pub struct Tracker {
     started: bool,
     seen: HashMap<DeviceKey, Seen>,
+    /// The user turned the smart warning's notice off.
+    smart_off: bool,
+    /// The user turned the "battery full" notice off.
+    full_off: bool,
 }
 
 fn is_full(d: &DeviceView, lang: Lang) -> bool {
@@ -33,6 +37,12 @@ fn is_full(d: &DeviceView, lang: Lang) -> bool {
 }
 
 impl Tracker {
+    /// The user's switches for the two notices this tracker decides (the demo source has no estimators).
+    pub fn set_alerts(&mut self, smart: bool, full: bool) {
+        self.smart_off = !smart;
+        self.full_off = !full;
+    }
+
     /// Compares `snap` with what was seen before. The first snapshot after start only records the
     /// state (no notice for what was already true); a device that shows up later with a warning
     /// is announced, one that shows up full is not.
@@ -46,10 +56,10 @@ impl Tracker {
             let prev = known.unwrap_or_default();
             let warned = d.on && d.warning.is_some();
             let full = is_full(d, lang);
-            if warned && !prev.warned && !first {
+            if warned && !prev.warned && !first && !self.smart_off {
                 out.push(warning_notice(d, lang));
             }
-            if full && !prev.full && known.is_some() && !first {
+            if full && !prev.full && known.is_some() && !first && !self.full_off {
                 out.push(Notice {
                     title: strings::fmt(lang, id::NOTICE_FULL_TITLE, &[&d.name]),
                     body: strings::get(lang, id::NOTICE_FULL_BODY).to_string(),
@@ -127,6 +137,22 @@ mod tests {
         );
         assert!(t.observe(&snap(DemoPhase::Full, lang), lang).is_empty());
         t.observe(&snap(DemoPhase::Normal, lang), lang);
+        assert_eq!(t.observe(&snap(DemoPhase::Full, lang), lang).len(), 1);
+    }
+
+    #[test]
+    fn the_switches_silence_their_notice_and_the_notice_comes_back_when_the_switch_does() {
+        let lang = Lang::PtBr;
+        let mut t = Tracker::default();
+        t.set_alerts(false, false);
+        t.observe(&snap(DemoPhase::Normal, lang), lang);
+        assert!(t.observe(&snap(DemoPhase::Warning, lang), lang).is_empty());
+        t.observe(&snap(DemoPhase::Charging, lang), lang);
+        assert!(t.observe(&snap(DemoPhase::Full, lang), lang).is_empty());
+        t.observe(&snap(DemoPhase::Normal, lang), lang);
+        t.set_alerts(true, true);
+        assert_eq!(t.observe(&snap(DemoPhase::Warning, lang), lang).len(), 1);
+        t.observe(&snap(DemoPhase::Charging, lang), lang);
         assert_eq!(t.observe(&snap(DemoPhase::Full, lang), lang).len(), 1);
     }
 

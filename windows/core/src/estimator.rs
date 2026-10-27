@@ -35,6 +35,9 @@ pub const FORECAST_LIMIT_SECONDS: i64 = 7 * DAY;
 pub const TYPICAL_DAY_MIN_USE: f64 = 0.2;
 pub const SMART_MARGIN: f64 = 1.1;
 pub const LOW_PERCENT: f64 = 10.0;
+/// The bounds of the low-battery level the user may set.
+pub const MIN_LOW_PERCENT: f64 = 5.0;
+pub const MAX_LOW_PERCENT: f64 = 30.0;
 pub const CYCLE_MIN_POINTS: f64 = 50.0;
 pub const HEALTH_CYCLES: usize = 3;
 pub const USAGE_KEEP_DAYS: i64 = 365;
@@ -306,6 +309,11 @@ pub struct DeviceHistory {
     pub full_sent: bool,
     pub smart_day: Option<i64>,
     pub notices: Vec<Notice>,
+
+    /// The level under which a discharging device is told to charge (the user's setting; `LOW_PERCENT` by default).
+    pub low_percent: f64,
+    /// False when the user turned the smart warning off: `smart_warning` then has nothing to say.
+    pub smart_on: bool,
 }
 
 impl DeviceHistory {
@@ -341,7 +349,15 @@ impl DeviceHistory {
             full_sent: false,
             smart_day: None,
             notices: Vec::new(),
+            low_percent: LOW_PERCENT,
+            smart_on: true,
         }
+    }
+
+    /// The user's alert settings: the low-battery level (5 to 30 %) and whether the smart warning is on.
+    pub fn set_alerts(&mut self, low_percent: f64, smart_on: bool) {
+        self.low_percent = low_percent.clamp(MIN_LOW_PERCENT, MAX_LOW_PERCENT);
+        self.smart_on = smart_on;
     }
 
     /// A history with the catalog's priors for a model (20 h and 2.5 h when it has none).
@@ -429,7 +445,7 @@ impl DeviceHistory {
         }
         if kind == Some(Segment::Discharge)
             && measurable
-            && r.percent.is_some_and(|p| p < LOW_PERCENT)
+            && r.percent.is_some_and(|p| p < self.low_percent)
             && !self.low_sent
         {
             self.low_sent = true;
@@ -1019,11 +1035,14 @@ pub fn expected_use_left_today(h: &DeviceHistory, now: i64) -> f64 {
 /// The text of the smart warning if the condition holds at `now` (online, discharging, hours left below 1.1 times
 /// the expected use left today), else `None`. The once-per-day gate lives in `DeviceHistory`.
 pub fn smart_warning(h: &DeviceHistory, now: i64, lang: Lang) -> Option<String> {
+    if !h.smart_on {
+        return None;
+    }
     let hl = hours_left(h)?;
     if hl >= expected_use_left_today(h, now) * SMART_MARGIN {
         return None;
     }
-    let to_ten = ((h.level()? - LOW_PERCENT) / discharge_rate(h)).max(0.0);
+    let to_ten = ((h.level()? - h.low_percent) / discharge_rate(h)).max(0.0);
     let moment = walk_use(
         &h.profile(now),
         h.utc_offset,
@@ -1036,14 +1055,14 @@ pub fn smart_warning(h: &DeviceHistory, now: i64, lang: Lang) -> Option<String> 
     Some(strings::fmt_n(lang, id::SMART_WARNING, &[hour]))
 }
 
-/// "<device> com <n>%" when the level of a discharging device is below 10 %.
+/// "<device> com <n>%" when the level of a discharging device is below the user's low level (10 % by default).
 pub fn low_warning(h: &DeviceHistory, lang: Lang) -> Option<String> {
     let last = h.last.as_ref()?;
     if h.segment != Some(Segment::Discharge) || last.charging != Charging::Discharging {
         return None;
     }
     let level = h.level()?;
-    if level >= LOW_PERCENT {
+    if level >= h.low_percent {
         return None;
     }
     Some(strings::fmt(
