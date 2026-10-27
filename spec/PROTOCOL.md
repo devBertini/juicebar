@@ -24,14 +24,16 @@ What the `logitech-hidpp` provider (`spec/PROVIDERS.md`) sends and reads. Every 
 | Feature | Read | Decode | Event |
 |---|---|---|---|
 | `0x1004` Unified Battery | function 1 (status); function 0 gives capabilities | byte 0 percent, byte 1 level bits (8 full, 4 good, 2 low, 1 critical), byte 2 charging (0 discharging, 1 charging, 2 slow, 3 full, others per capability), quality `exact` | event 0, same layout: pushed on reconnect and on change (G915 X) |
-| `0x1001` Battery Voltage | function 0 | bytes 0..1 millivolts big-endian, byte 2 flags (bit 7 charging), quality `derived` through `spec/curves.tsv` | event 0, same layout: pushed on reconnect (G703) |
+| `0x1001` Battery Voltage | function 0 | bytes 0..1 millivolts big-endian, byte 2 flags (bit 7 charging), quality `derived` through `spec/curves.tsv` | event 0, same layout: pushed on reconnect only (G703), so the 600 s refresh stays |
 | `0x1000` Battery Status | function 0 | byte 0 percent, byte 1 next level, byte 2 status | event 0 |
 | `0x1F20` ADC (headsets) | function 0 | bytes 0..1 millivolts big-endian, byte 2 flags (meaning not yet measured: 0x01 while G HUB said not charging), quality `derived` | not measured |
 
 ## Presence
-- **Receivers:** HID++ 1.0 notification `0x41` (`[0x10, slot, 0x41, b0, b1, wpid hi, wpid lo]`): bit 0x40 of `b0` set means link lost, clear means link established. They arrive only after the receiver's notifications are enabled: JuiceBar reads register `0x00` (short read `0x81 0x00`) and, when the wireless (`0x000100`) and software-present (`0x000800`) flags are not both set, writes them (short write `0x80 0x00`), the one register write the provider makes. G HUB enables them too; writing the same flags is harmless.
+- **Receivers:** HID++ 1.0 notification `0x41` (`[0x10, slot, 0x41, b3, b4, wpid lo, wpid hi]`): bit 0x40 of byte 4 set means link lost, clear means link established; the wireless product id is little-endian (measured: `10 01 41 0c 62 86 40` is the G703, 0x4086, link lost; `... a2 86 40` established). They arrive only after the receiver's notifications are enabled: JuiceBar reads register `0x00` (short read `0x81 0x00`) and, when the wireless (`0x000100`) and software-present (`0x000800`) flags are not both set, writes them (short write `0x80 0x00`), the one register write the provider makes. G HUB enables them too; writing the same flags is harmless.
 - **Dongles and cabled devices:** the OS device arrival and removal (`CM_Register_Notification` on Windows, IOHIDManager matching on the Mac). A dongle present with its headset off answers with a HID++ error or device index error: offline until a ping succeeds; while the dongle is present and the headset offline, ping it at most every 60 s (the only periodic request JuiceBar makes for presence).
 - On every link-established moment: discovery if needed, then one battery read unless the device pushed its battery within 2 s.
+- **Pushing devices skip the slow refresh:** a `0x1004` device that has pushed a battery event in this connection is not refreshed every 600 s; every other device (`0x1001`, `0x1000`, `0x1F20`) is.
+- A cabled device answers at index 0xFF (measured on the G915 X as C356) and also at 1 to 6; JuiceBar uses 0xFF.
 
 ## Coexistence
 After a reconnect G HUB re-reads the whole device (dozens of requests in 200 ms). JuiceBar never repeats that: one ping, the cached feature index, one battery read at most.
