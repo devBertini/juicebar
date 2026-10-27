@@ -194,7 +194,7 @@ mod tests {
     fn catalog_has_every_row_of_the_file() {
         let data_lines = DEVICES_TSV
             .lines()
-            .filter(|l| !l.starts_with('#') && !l.starts_with("provider\t") && !l.is_empty())
+            .filter(|l| l.starts_with("logitech-hidpp\t"))
             .count();
         assert_eq!(rows().len(), data_lines);
         assert_eq!(rows().len(), 8);

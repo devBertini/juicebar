@@ -5,6 +5,7 @@
 
 mod app;
 mod args;
+mod controllers;
 mod files;
 mod live;
 mod menu;
@@ -20,6 +21,12 @@ mod winhost;
 fn main() {
     let args = args::Args::parse(std::env::args().skip(1));
     let user = single::current_user();
+    // A run with its own data folder is a test: it gets its own single-instance name, so it never meets the owner's copy.
+    let user = if args.data.is_some() {
+        format!("{user}-data")
+    } else {
+        user
+    };
     let _instance = match single::acquire(&user) {
         single::Acquire::First(i) => i,
         single::Acquire::Second => {

@@ -14,8 +14,10 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPEC = os.path.join(ROOT, "spec")
 KINDS = {"mouse", "keyboard", "headset", "earbuds", "gamepad", "other"}
-MATCHES = {"receiver", "dongle", "wpid", "usb"}
-BATTERIES = {"-", "hidpp-0x1000", "hidpp-0x1001", "hidpp-0x1004", "hidpp-0x1f20"}
+MATCHES = {"receiver", "dongle", "wpid", "usb", "sony", "microsoft"}
+BATTERIES = {"-", "hidpp-0x1000", "hidpp-0x1001", "hidpp-0x1004", "hidpp-0x1f20", "hid-ds5", "wgi"}
+VENDOR_MATCHES = {"sony", "microsoft"}
+PAD_BATTERIES = {"hid-ds5", "wgi"}
 REPORT_LENGTHS = {0x10: 7, 0x11: 20, 0x12: 64, 0x20: 15}
 
 
@@ -79,6 +81,12 @@ def check_devices(curves, problems):
             problems.append("%s: kind %r unknown" % (where, c[4]))
         if c[5] not in BATTERIES:
             problems.append("%s: battery %r unknown" % (where, c[5]))
+        if (c[0] == "game-controllers") != (c[1] in VENDOR_MATCHES):
+            problems.append("%s: match sony and microsoft belong to game-controllers, and only to it" % where)
+        if (c[0] == "game-controllers") != (c[5] in PAD_BATTERIES):
+            problems.append("%s: battery hid-ds5 and wgi belong to game-controllers, and only to it" % where)
+        if c[0] == "game-controllers" and c[4] != "gamepad":
+            problems.append("%s: a game-controllers row must be kind gamepad" % where)
         if c[5] in ("hidpp-0x1001", "hidpp-0x1f20") and c[6] not in curves:
             problems.append("%s: a voltage device needs a curve in curves.tsv (%r)" % (where, c[6]))
         for col in (7, 8, 9):
