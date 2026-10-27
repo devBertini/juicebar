@@ -63,6 +63,7 @@ const CHART_TITLE_H: f32 = 15.0;
 const CHART_H: f32 = 98.0;
 const STATS_H: f32 = 33.0;
 const SEP_H: f32 = 15.0;
+const EMPTY_H: f32 = 64.0;
 const FOOT_GAP: f32 = 8.0;
 const FOOT_PAD: f32 = 10.0;
 const SWITCH_W: f32 = 40.0;
@@ -158,6 +159,8 @@ pub struct Layout {
     pub rows: Vec<RowGeom>,
     /// "Desligados" separator, present when any device is off.
     pub separator: Option<Rect>,
+    /// Where the "no devices yet" text goes; present only when the list is empty.
+    pub empty: Option<Rect>,
     pub footer: FooterGeom,
 }
 
@@ -217,6 +220,11 @@ impl Layout {
                 y += ROW_H;
             }
         }
+        let empty = state.devices.is_empty().then(|| {
+            let r = Rect::new(list_x, y + 4.0, list_w, EMPTY_H);
+            y += EMPTY_H + 4.0;
+            r
+        });
         let foot_top = y + FOOT_GAP;
         let content_y = foot_top + FOOT_PAD;
         let icon = Rect::new(PAD_X + 8.0, content_y + 2.0, 16.0, 16.0);
@@ -246,6 +254,7 @@ impl Layout {
             gear,
             rows,
             separator,
+            empty,
             footer,
         }
     }
