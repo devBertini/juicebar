@@ -9,17 +9,20 @@
 //! device. A group has one request in flight at a time and a queue behind it. Groups are told apart by USB product
 //! id, so two receivers of the same model at once are not supported.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::hidpp::catalog::{self, Match, Row};
 use crate::hidpp::{
     self, BatteryData, ConnectionNotice, F_DEVICE_NAME, F_UNIFIED_BATTERY, Reply, Request,
 };
+use crate::lighting::{self, LightStep, Lighting, LightingEvent, SavedLight};
 use crate::registry::logitech_key;
 use crate::types::{
     Action, BatteryReading, Capabilities, Connection, DeviceInfo, DeviceKey, Endpoint, Kind, Now,
     Presence, ProviderEvent, Quality, TransportEvent,
 };
+
+mod light;
 
 pub const PROVIDER_ID: &str = "logitech-hidpp";
 const VENDOR_ID: u16 = 0x046D;
@@ -57,6 +60,8 @@ enum Step {
     NameCount,
     NameChunk(u8),
     Battery,
+    /// The RGB economy's own requests (`lighting`), made only on the app's explicit order.
+    Light(LightStep),
 }
 
 impl Step {
@@ -139,6 +144,8 @@ struct Dev {
     refresh_at: Option<f64>,
     ping_at: Option<f64>,
     early: Vec<EarlyEvent>,
+    /// The RGB economy's state for this path to the device.
+    light: Lighting,
 }
 
 impl Dev {
@@ -178,6 +185,7 @@ impl Dev {
             refresh_at: None,
             ping_at: None,
             early: Vec::new(),
+            light: Lighting::default(),
         }
     }
 
@@ -261,6 +269,12 @@ pub struct Logitech {
     names: HashMap<DeviceKey, String>,
     announced: HashMap<DeviceKey, Announced>,
     last_wake: Option<f64>,
+    /// Devices the economy is wanted on, and whether it is wanted on every device (also the ones not seen yet).
+    wanted: HashSet<DeviceKey>,
+    all_wanted: bool,
+    /// The level each device had before the economy (kept by the app between runs).
+    saved: HashMap<DeviceKey, SavedLight>,
+    light_events: Vec<LightingEvent>,
 }
 
 impl Logitech {
@@ -289,6 +303,7 @@ impl Logitech {
             let mut di = 0;
             while di < self.groups[gi].devs.len() {
                 self.run_timers(gi, di, now);
+                self.light_timers(gi, di, now);
                 di += 1;
             }
             self.pump(gi, now, &mut out);
@@ -491,6 +506,7 @@ impl Logitech {
         g.queue
             .retain(|j| !(j.dev == index && j.step == Step::Ping));
         let d = &mut g.devs[di];
+        let was_online = d.online;
         d.link = Link::Up;
         d.online = true;
         d.warm = false;
@@ -503,6 +519,9 @@ impl Logitech {
                 dev: index,
                 step: Step::Feature(hidpp::BATTERY_FEATURES[0]),
             });
+        }
+        if !was_online {
+            self.light_on_online(gi, di, now);
         }
         let key = self.groups[gi].devs[di].key.clone();
         self.sync_key(&key, now, out);
@@ -519,6 +538,7 @@ impl Logitech {
         d.battery_due = None;
         d.refresh_at = None;
         d.early.clear();
+        d.light.connection_lost();
         d.link = match cause {
             Cause::LinkLost | Cause::Refused => Link::Down,
             Cause::Timeout => Link::Unknown,
@@ -542,11 +562,15 @@ impl Logitech {
 
     fn mark_online(&mut self, gi: usize, di: usize, now: Now, out: &mut Vec<Action>) {
         let d = &mut self.groups[gi].devs[di];
+        let was_online = d.online;
         d.link = Link::Up;
         d.online = true;
         d.warm = true;
         d.ping_at = None;
         let key = d.key.clone();
+        if !was_online {
+            self.light_on_online(gi, di, now);
+        }
         self.sync_key(&key, now, out);
     }
 
@@ -558,16 +582,24 @@ impl Logitech {
                 break;
             };
             let Some((req, timeout)) = self.build(gi, job) else {
+                self.drop_light_job(gi, job);
                 continue;
             };
-            let g = &mut self.groups[gi];
-            // The allow-list is the last gate: nothing outside spec/PROTOCOL.md reaches a wire.
-            if !hidpp::is_allowed(&req) {
+            // The allow-list is the last gate: nothing outside spec/PROTOCOL.md reaches a wire. The economy's
+            // requests have their own list (`lighting::is_allowed`), which the general one never admits.
+            let allowed = match job.step {
+                Step::Light(_) => self.light_allowed(gi, job.dev, &req),
+                _ => hidpp::is_allowed(&req),
+            };
+            if !allowed {
                 debug_assert!(false, "request outside the allow-list: {req:?}");
+                self.drop_light_job(gi, job);
                 continue;
             }
+            let g = &mut self.groups[gi];
             let endpoint = if req.is_long() { g.long } else { g.short };
             let Some(endpoint) = endpoint else {
+                self.drop_light_job(gi, job);
                 continue;
             };
             out.push(Action::Send(endpoint, req.encode()));
@@ -576,6 +608,15 @@ impl Logitech {
                 req,
                 deadline: now.mono + timeout,
             });
+        }
+    }
+
+    /// A lighting job that cannot be sent ends its chain, so the next order can start another.
+    fn drop_light_job(&mut self, gi: usize, job: Job) {
+        if matches!(job.step, Step::Light(_))
+            && let Some(di) = self.groups[gi].dev_pos(job.dev)
+        {
+            self.groups[gi].devs[di].light.chain = None;
         }
     }
 
@@ -618,9 +659,16 @@ impl Logitech {
                 let function = if feature == F_UNIFIED_BATTERY { 1 } else { 0 };
                 Request::feature(job.dev, index, function, &[], long)
             }
+            Step::Light(step) => d.light.request(job.dev, step)?,
             _ => return None,
         };
-        let timeout = if d.warm { TIMEOUT } else { FIRST_TIMEOUT };
+        // A keyboard falls asleep within seconds (a request after 2 s of quiet was answered after 1.5 s): the
+        // economy's requests, which the owner asked for, always get the long wait.
+        let timeout = if d.warm && !matches!(job.step, Step::Light(_)) {
+            TIMEOUT
+        } else {
+            FIRST_TIMEOUT
+        };
         Some((req, timeout))
     }
 
@@ -716,6 +764,10 @@ impl Logitech {
         let Some(di) = self.groups[gi].dev_pos(job.dev) else {
             return;
         };
+        if let Step::Light(step) = job.step {
+            self.complete_light(gi, di, step, result, now, out);
+            return;
+        }
         if matches!(result, JobResult::Timeout) {
             self.dev_offline(gi, di, Cause::Timeout, now, out);
             return;
@@ -1218,6 +1270,11 @@ impl Logitech {
                     && d.online
                     && d.discovered
                     && !d.probing
+                {
+                    take(t);
+                }
+                if d.online
+                    && let Some(t) = d.light.next_due()
                 {
                     take(t);
                 }

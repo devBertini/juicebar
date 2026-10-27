@@ -25,6 +25,14 @@ pub struct ViewInput<'a> {
     pub utc_offset: i32,
 }
 
+/// The footer text while a read-back finds G HUB putting the lighting back after the RGB economy turned it down.
+pub fn ghub_notice(lang: Lang) -> &'static str {
+    match lang {
+        Lang::PtBr => "o G HUB está reaplicando a iluminação",
+        Lang::En => "G HUB is reapplying the lighting",
+    }
+}
+
 pub fn glyph_for(kind: Kind) -> Glyph {
     match kind {
         Kind::Mouse => Glyph::Mouse,
@@ -178,6 +186,15 @@ mod tests {
             wall: DEMO_NOW,
             utc_offset: -10800,
         }
+    }
+
+    #[test]
+    fn the_footer_notice_names_g_hub_in_both_languages() {
+        assert_eq!(
+            ghub_notice(Lang::PtBr),
+            "o G HUB está reaplicando a iluminação"
+        );
+        assert!(ghub_notice(Lang::En).contains("G HUB"));
     }
 
     #[test]

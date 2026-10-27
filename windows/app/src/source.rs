@@ -101,6 +101,13 @@ impl Source {
         }
     }
 
+    pub fn live(&self) -> Option<&Live<WinHost>> {
+        match self {
+            Source::Live(live) => Some(live),
+            _ => None,
+        }
+    }
+
     pub fn live_mut(&mut self) -> Option<&mut Live<WinHost>> {
         match self {
             Source::Live(live) => Some(live),
