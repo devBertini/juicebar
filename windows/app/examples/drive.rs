@@ -6,6 +6,9 @@
 //! icon to close and reopen it, launches a second instance, captures the cycle's icon states and
 //! prints the app's trace.
 //!
+//! `cargo run -p juicebar --example drive -- measure-live`: starts `JuiceBar.exe` on the real devices, never
+//! opens the flyout and prints its memory and the CPU time used over 60 seconds.
+//!
 //! `cargo run -p juicebar --example drive -- measure`: starts `JuiceBar.exe --demo`, lets it idle
 //! and prints its working set, private bytes and the CPU time used over 30 seconds.
 
@@ -338,6 +341,35 @@ fn measure() {
     let _ = child.wait();
 }
 
+/// The live app idle with the flyout never opened: memory at 5 s and at 65 s, CPU over the 60 s between.
+fn measure_live() {
+    let mut child = spawn(&["--seconds", "75"]);
+    sleep(Duration::from_secs(5));
+    let (ws0, pv0) = memory(&child);
+    let cpu0 = cpu_100ns(&child);
+    println!(
+        "t=5s: working set {:.1} MiB, private {:.1} MiB, cpu so far {:.1} ms",
+        mib(ws0),
+        mib(pv0),
+        cpu0 as f64 / 10_000.0
+    );
+    sleep(Duration::from_secs(60));
+    let (ws1, pv1) = memory(&child);
+    let cpu1 = cpu_100ns(&child);
+    println!(
+        "t=65s: working set {:.1} MiB, private {:.1} MiB, cpu total {:.1} ms",
+        mib(ws1),
+        mib(pv1),
+        cpu1 as f64 / 10_000.0
+    );
+    println!(
+        "cpu time over those 60 s: {:.1} ms",
+        (cpu1 - cpu0) as f64 / 10_000.0
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn capture_run(dir: &Path) {
     std::fs::create_dir_all(dir).expect("folder");
     let trace = dir.join("trace.txt");
@@ -430,14 +462,26 @@ fn main() {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("measure") => measure(),
+        Some("measure-live") => measure_live(),
         Some("empty") => {
-            // The app without --demo: the "no devices yet" flyout.
+            // The "no devices yet" flyout.
             let png = args.next().expect("png path");
             let lang = args.next().unwrap_or_else(|| "pt-BR".into());
-            let mut child = spawn(&["--seconds", "8", "--lang", &lang]);
+            let mut child = spawn(&["--empty", "--seconds", "8", "--lang", &lang]);
             sleep(Duration::from_secs(2));
             hotkey();
             sleep(Duration::from_millis(1500));
+            capture_flyout(Path::new(&png));
+            let _ = child.wait();
+        }
+        Some("live") => {
+            // The real devices: give the receivers time to answer, open the flyout, capture it.
+            let png = args.next().expect("png path");
+            let lang = args.next().unwrap_or_else(|| "pt-BR".into());
+            let mut child = spawn(&["--seconds", "40", "--lang", &lang]);
+            sleep(Duration::from_secs(20));
+            hotkey();
+            sleep(Duration::from_millis(1800));
             capture_flyout(Path::new(&png));
             let _ = child.wait();
         }
@@ -453,7 +497,7 @@ fn main() {
         }
         Some("capture") => capture_run(Path::new(&args.next().expect("output folder"))),
         _ => eprintln!(
-            "usage: drive capture <folder> [lang] | drive measure | drive empty <png> [lang] | drive shot <png>"
+            "usage: drive capture <folder> [lang] | drive measure | drive measure-live | drive empty <png> [lang] | drive live <png> [lang] | drive shot <png>"
         ),
     }
 }

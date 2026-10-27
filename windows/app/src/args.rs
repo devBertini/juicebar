@@ -15,9 +15,20 @@ pub struct Args {
     pub lang: Option<String>,
     /// Append the tray events to this file (tests).
     pub trace: Option<PathBuf>,
+    /// Append one line per transport event and action to this file (off by default).
+    pub log: Option<PathBuf>,
+    /// Keep settings and histories in this folder instead of `%LOCALAPPDATA%\JuiceBar` (tests).
+    pub data: Option<PathBuf>,
+    /// Show the empty "no devices yet" state and read no device (captures).
+    pub empty: bool,
 }
 
 impl Args {
+    /// A normal launch reads the real devices; the demo and the empty state do not.
+    pub fn is_live(&self) -> bool {
+        !self.demo && !self.empty
+    }
+
     pub fn parse<I: IntoIterator<Item = String>>(items: I) -> Args {
         let mut a = Args::default();
         let mut it = items.into_iter();
@@ -31,6 +42,9 @@ impl Args {
                 "--seconds" => a.seconds = it.next().and_then(|v| v.parse().ok()),
                 "--lang" => a.lang = it.next(),
                 "--trace" => a.trace = it.next().map(PathBuf::from),
+                "--log" => a.log = it.next().map(PathBuf::from),
+                "--data" => a.data = it.next().map(PathBuf::from),
+                "--empty" => a.empty = true,
                 _ => {}
             }
         }
@@ -56,6 +70,17 @@ mod tests {
         let a = parse("--demo-cycle --seconds 40");
         assert!(a.demo && a.demo_cycle);
         assert_eq!(a.seconds, Some(40));
+    }
+
+    #[test]
+    fn log_data_and_empty_parse_and_only_the_plain_launch_is_live() {
+        let a = parse("--log a.txt --data d --seconds 5");
+        assert_eq!(a.log, Some(PathBuf::from("a.txt")));
+        assert_eq!(a.data, Some(PathBuf::from("d")));
+        assert!(a.is_live());
+        assert!(!parse("--demo").is_live());
+        assert!(!parse("--empty").is_live());
+        assert!(parse("").log.is_none());
     }
 
     #[test]

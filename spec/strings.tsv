@@ -58,3 +58,10 @@ tooltip_line_status	{0} {1}% · {2}	{0} {1}% · {2}
 tooltip_off	{0} · off	{0} · desligado
 tooltip_empty	JuiceBar: no devices	JuiceBar: nenhum dispositivo
 tooltip_plain	{0} · {1}	{0} · {1}
+menu_open	Open	Abrir
+menu_autostart	Start with Windows	Iniciar com o Windows
+menu_hotkey_unavailable	Shortcut {0} unavailable	Atalho {0} indisponível
+menu_devices	Devices	Dispositivos
+menu_quit	Quit	Sair
+empty_title	No devices yet	Nenhum dispositivo ainda
+empty_hint	Turn on a compatible mouse, keyboard or headset	Ligue um mouse, teclado ou fone compatível

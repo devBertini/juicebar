@@ -1,25 +1,25 @@
 // Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
-//! The tray's context menu: its texts in both languages and the Win32 popup.
-//!
-//! The core's string table (`spec/strings.tsv`) has no menu ids yet; until it does these live here.
+//! The tray's context menu: the Win32 popup, with its texts from the core's table (`spec/strings.tsv`).
 
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, MF_CHECKED, MF_DISABLED, MF_GRAYED,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_POPUP,
     MF_SEPARATOR, MF_STRING, MF_UNCHECKED, PostMessageW, SetForegroundWindow, TPM_BOTTOMALIGN,
     TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
 };
 use windows::core::{HSTRING, PCSTR, w};
 
-use juicebar_core::strings::Lang;
+use juicebar_core::strings::{self, Lang, id};
 
 /// What the user picked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
     Open,
     Autostart,
+    /// The user flipped the check of the n-th device of the "Dispositivos" submenu.
+    Device(usize),
     Quit,
 }
 
@@ -27,6 +27,8 @@ const ID_OPEN: usize = 1;
 const ID_AUTOSTART: usize = 2;
 const ID_HOTKEY: usize = 3;
 const ID_QUIT: usize = 4;
+/// The n-th device of the submenu has the id `ID_DEVICE_BASE + n`.
+const ID_DEVICE_BASE: usize = 100;
 
 impl Command {
     fn from_id(id: usize) -> Option<Command> {
@@ -34,6 +36,7 @@ impl Command {
             ID_OPEN => Some(Command::Open),
             ID_AUTOSTART => Some(Command::Autostart),
             ID_QUIT => Some(Command::Quit),
+            n if n >= ID_DEVICE_BASE => Some(Command::Device(n - ID_DEVICE_BASE)),
             _ => None,
         }
     }
@@ -45,29 +48,25 @@ pub struct MenuText {
     pub open: &'static str,
     pub autostart: &'static str,
     pub hotkey_unavailable: String,
+    pub devices: &'static str,
     pub quit: &'static str,
-    /// The flyout's text while no device is known yet.
-    pub empty: &'static str,
+    /// The flyout's text while no device is known yet: a title line and a hint line.
+    pub empty: String,
 }
 
 pub fn texts(lang: Lang, hotkey: &str) -> MenuText {
-    match lang {
-        Lang::PtBr => MenuText {
-            open: "Abrir",
-            autostart: "Iniciar com o Windows",
-            hotkey_unavailable: format!("Atalho {hotkey} indisponível"),
-            quit: "Sair",
-            empty: "Nenhum dispositivo ainda
-Ligue um mouse, teclado ou fone compatível",
-        },
-        Lang::En => MenuText {
-            open: "Open",
-            autostart: "Start with Windows",
-            hotkey_unavailable: format!("Shortcut {hotkey} unavailable"),
-            quit: "Quit",
-            empty: "No devices yet
-Turn on a compatible mouse, keyboard or headset",
-        },
+    MenuText {
+        open: strings::get(lang, id::MENU_OPEN),
+        autostart: strings::get(lang, id::MENU_AUTOSTART),
+        hotkey_unavailable: strings::fmt(lang, id::MENU_HOTKEY_UNAVAILABLE, &[hotkey]),
+        devices: strings::get(lang, id::MENU_DEVICES),
+        quit: strings::get(lang, id::MENU_QUIT),
+        empty: format!(
+            "{}
+{}",
+            strings::get(lang, id::EMPTY_TITLE),
+            strings::get(lang, id::EMPTY_HINT)
+        ),
     }
 }
 
@@ -103,6 +102,7 @@ pub fn show(
     hotkey: &str,
     autostart: bool,
     hotkey_ok: bool,
+    devices: &[(String, bool)],
 ) -> Option<Command> {
     let t = texts(lang, hotkey);
     // SAFETY: creating a popup menu that is destroyed before returning.
@@ -115,6 +115,24 @@ pub fn show(
         }
     };
     append(MF_STRING, ID_OPEN, t.open);
+    if !devices.is_empty() {
+        // SAFETY: creating a submenu; once appended below, destroying `menu` destroys it too.
+        if let Ok(sub) = unsafe { CreatePopupMenu() } {
+            for (i, (name, shown)) in devices.iter().enumerate() {
+                let text = HSTRING::from(name.replace('&', "&&"));
+                let flags = MF_STRING | if *shown { MF_CHECKED } else { MF_UNCHECKED };
+                // SAFETY: `sub` is valid; the text is copied by the call.
+                unsafe {
+                    let _ = AppendMenuW(sub, flags, ID_DEVICE_BASE + i, &text);
+                }
+            }
+            let label = HSTRING::from(t.devices);
+            // SAFETY: a popup item takes the submenu handle as its id; `menu` owns it from here on.
+            unsafe {
+                let _ = AppendMenuW(menu, MF_POPUP | MF_STRING, sub.0 as usize, &label);
+            }
+        }
+    }
     append(
         MF_STRING | if autostart { MF_CHECKED } else { MF_UNCHECKED },
         ID_AUTOSTART,
@@ -167,7 +185,19 @@ mod tests {
         assert_eq!(en.open, "Open");
         assert_eq!(en.autostart, "Start with Windows");
         assert_eq!(en.quit, "Quit");
+        assert_eq!(en.devices, "Devices");
+        assert_eq!(pt.devices, "Dispositivos");
         assert_eq!(en.hotkey_unavailable, "Shortcut Ctrl+Alt+B unavailable");
+        assert_eq!(
+            pt.empty,
+            "Nenhum dispositivo ainda
+Ligue um mouse, teclado ou fone compatível"
+        );
+        assert_eq!(
+            en.empty,
+            "No devices yet
+Turn on a compatible mouse, keyboard or headset"
+        );
     }
 
     #[test]
@@ -178,7 +208,8 @@ mod tests {
                 t.open,
                 t.autostart,
                 t.quit,
-                t.empty,
+                t.devices,
+                t.empty.as_str(),
                 t.hotkey_unavailable.as_str(),
             ] {
                 assert!(!s.is_empty() && !s.contains('\u{2014}'), "{s:?}");
@@ -192,6 +223,11 @@ mod tests {
         assert_eq!(Command::from_id(ID_AUTOSTART), Some(Command::Autostart));
         assert_eq!(Command::from_id(ID_QUIT), Some(Command::Quit));
         assert_eq!(Command::from_id(ID_HOTKEY), None);
+        assert_eq!(Command::from_id(ID_DEVICE_BASE), Some(Command::Device(0)));
+        assert_eq!(
+            Command::from_id(ID_DEVICE_BASE + 3),
+            Some(Command::Device(3))
+        );
         assert_eq!(Command::from_id(0), None);
     }
 }

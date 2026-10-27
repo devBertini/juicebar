@@ -99,7 +99,14 @@ ids! {
     TOOLTIP_LINE_STATUS = "tooltip_line_status",
     TOOLTIP_OFF = "tooltip_off",
     TOOLTIP_EMPTY = "tooltip_empty",
-    TOOLTIP_PLAIN = "tooltip_plain"
+    TOOLTIP_PLAIN = "tooltip_plain",
+    MENU_OPEN = "menu_open",
+    MENU_AUTOSTART = "menu_autostart",
+    MENU_HOTKEY_UNAVAILABLE = "menu_hotkey_unavailable",
+    MENU_DEVICES = "menu_devices",
+    MENU_QUIT = "menu_quit",
+    EMPTY_TITLE = "empty_title",
+    EMPTY_HINT = "empty_hint"
 }
 
 type Table = HashMap<&'static str, (&'static str, &'static str)>;

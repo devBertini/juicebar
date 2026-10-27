@@ -4,6 +4,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -30,19 +31,24 @@ use windows::core::{PCWSTR, Result, w};
 use juicebar_core::snapshot::Snapshot;
 use juicebar_core::strings::Lang;
 use juicebar_core::types::DeviceKey;
+use juicebar_hid::Transport;
 use juicebar_ui::flyout::{Flyout, Handlers};
 use juicebar_ui::layout::{FlyoutHit, PxRect};
 use juicebar_ui::model::{IconState, UiState};
 use juicebar_ui::system;
 
 use crate::args::Args;
+use crate::files::DataDir;
+use crate::live::{Live, StartConfig};
 use crate::menu::{self, Command};
-use crate::notify::Tracker;
+use crate::notify::{Notice, Tracker};
 use crate::runkey;
+use crate::settings::Settings;
 use crate::single::{self, WINDOW_CLASS};
 use crate::source::{Clock, DemoPhase, Source};
 use crate::tray::{self, IconKey, Tray};
 use crate::view::{self, ViewInput};
+use crate::winhost::{self, WinHost};
 
 /// `NINF_KEY | NIN_SELECT`: the icon was activated from the keyboard (Enter or Space).
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
@@ -55,7 +61,7 @@ const WM_FLYOUT_CLOSED: u32 = WM_APP + 3;
 
 const HOTKEY_ID: i32 = 1;
 const HOTKEY_TEXT: &str = "Ctrl+Alt+B";
-/// The one-shot timer the source asks for (`wake_at`).
+/// The one-shot timer the source asks for (`wake_at`, and the live source's `Wake`).
 const TIMER_WAKE: usize = 1;
 /// `--seconds N`: quit by itself (tests and captures only).
 const TIMER_QUIT: usize = 2;
@@ -128,16 +134,24 @@ fn point_of(v: usize) -> POINT {
     }
 }
 
-/// The language of the user's Windows, or the one forced on the command line.
+/// Portuguese in any variant is Brazilian Portuguese (the only one the app ships); every other language is English.
+pub fn lang_from_langid(langid: u16) -> Lang {
+    /// LANG_PORTUGUESE, the primary language id (the low ten bits of a LANGID).
+    const LANG_PORTUGUESE: u16 = 0x16;
+    if langid & 0x3ff == LANG_PORTUGUESE {
+        Lang::PtBr
+    } else {
+        Lang::En
+    }
+}
+
+/// The display language of the user's Windows, or the one forced on the command line.
 pub fn detect_lang(forced: Option<&str>) -> Lang {
     if let Some(tag) = forced {
         return Lang::from_tag(tag);
     }
-    let mut buf = [0u16; 85];
-    // SAFETY: `buf` is the documented LOCALE_NAME_MAX_LENGTH.
-    let n = unsafe { windows::Win32::Globalization::GetUserDefaultLocaleName(&mut buf) };
-    let len = (n.max(1) - 1) as usize;
-    Lang::from_tag(&String::from_utf16_lossy(&buf[..len]))
+    // SAFETY: a plain query with no arguments.
+    lang_from_langid(unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() })
 }
 
 pub struct App {
@@ -147,12 +161,23 @@ pub struct App {
     lang: Lang,
     msg_open: u32,
     msg_taskbar: u32,
+    /// Posted by the transport's waker: events are waiting in `drain`.
+    msg_hid: u32,
+    start: Instant,
+    data: Option<DataDir>,
+    settings: RefCell<Settings>,
+    transport: RefCell<Option<Rc<Transport>>>,
+    /// The live source has flushed and said good-bye to its devices (quit runs once).
+    live_closed: Cell<bool>,
+    /// The first snapshot always reaches the tray; later ones only when they differ.
+    applied_once: Cell<bool>,
     tray: RefCell<Tray>,
     flyout: RefCell<Option<Flyout>>,
     source: RefCell<Source>,
     snapshot: RefCell<Snapshot>,
     tracker: RefCell<Tracker>,
-    /// The "RGB saver" switch. For now it only flips here; W5b hands it to the devices.
+    /// The "RGB saver" switch (stored in settings.txt, handed to every tracker; it does not yet change the
+    /// devices' lighting).
     rgb_economy: Cell<bool>,
     expanded: RefCell<Option<DeviceKey>>,
     hotkey_ok: Cell<bool>,
@@ -167,23 +192,48 @@ impl App {
                 cycle: args.demo_cycle,
             }
         } else {
+            // The live source needs the window; `init` replaces this one.
             Source::Empty
         };
+        let data = if args.is_live() {
+            args.data
+                .clone()
+                .map(DataDir::at)
+                .or_else(DataDir::from_env)
+        } else {
+            None
+        };
+        let settings = data
+            .as_ref()
+            .map(|d| Settings::parse(&d.read_settings()))
+            .unwrap_or_default();
         let snapshot = source.snapshot(&Clock::now(), lang);
-        // SAFETY: registering a message by name.
-        let msg_taskbar = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
+        // SAFETY: registering messages by name.
+        let (msg_taskbar, msg_hid) = unsafe {
+            (
+                RegisterWindowMessageW(w!("TaskbarCreated")),
+                RegisterWindowMessageW(w!("JuiceBar.HidEvents")),
+            )
+        };
         App {
             hwnd: Cell::new(HWND::default()),
             exe: std::env::current_exe().unwrap_or_default(),
             lang,
             msg_open: single::open_message(user),
             msg_taskbar,
+            msg_hid,
+            start: Instant::now(),
+            data,
+            rgb_economy: Cell::new(settings.rgb_economy),
+            settings: RefCell::new(settings),
+            transport: RefCell::new(None),
+            live_closed: Cell::new(false),
+            applied_once: Cell::new(false),
             tray: RefCell::new(Tray::new(HWND::default(), WM_TRAY)),
             flyout: RefCell::new(None),
             source: RefCell::new(source),
             snapshot: RefCell::new(snapshot),
             tracker: RefCell::new(Tracker::default()),
-            rgb_economy: Cell::new(false),
             expanded: RefCell::new(None),
             hotkey_ok: Cell::new(false),
             args,
@@ -223,7 +273,10 @@ impl App {
             if ok { "registered" } else { "unavailable" }
         ));
         runkey::refresh(runkey::VALUE, &self.exe);
-        let snap = self.snapshot.borrow().clone();
+        if self.args.is_live() {
+            self.start_live();
+        }
+        let snap = self.source.borrow().snapshot(&Clock::now(), self.lang);
         self.apply(snap);
         trim_memory();
         if let Some(ms) = self.source.borrow().next_wake_ms() {
@@ -250,6 +303,13 @@ impl App {
         unsafe {
             let _ = KillTimer(Some(self.hwnd.get()), TIMER_WAKE);
         }
+        let ticked = self.source.borrow_mut().live_mut().map(|live| {
+            live.on_tick(winhost::core_now(self.start));
+        });
+        if ticked.is_some() {
+            self.after_live(false);
+            return;
+        }
         let changed = self.source.borrow_mut().advance();
         if changed {
             let snap = self.source.borrow().snapshot(&Clock::now(), self.lang);
@@ -257,6 +317,105 @@ impl App {
         }
         if let Some(ms) = self.source.borrow().next_wake_ms() {
             self.wake_at(ms);
+        }
+    }
+
+    // ---- the live source
+
+    /// Starts the real devices: the history files are read and every known device is set offline before the
+    /// transport's first event is looked at (events only reach the loop through the HID message, which is
+    /// handled after this returns).
+    fn start_live(&self) {
+        let hwnd = self.hwnd.get();
+        let transport = match winhost::start_transport(hwnd, self.msg_hid) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                self.trace(&format!("transport failed: {e}"));
+                None
+            }
+        };
+        *self.transport.borrow_mut() = transport.clone();
+        let host = WinHost::new(
+            hwnd,
+            TIMER_WAKE,
+            transport,
+            self.start,
+            self.data.clone(),
+            self.args.log.clone(),
+        );
+        let histories = self
+            .data
+            .as_ref()
+            .map(DataDir::read_histories)
+            .unwrap_or_default();
+        let cfg = {
+            let settings = self.settings.borrow();
+            StartConfig {
+                lang: self.lang,
+                rgb_economy: settings.rgb_economy,
+                hidden: settings.hidden.clone(),
+            }
+        };
+        let live = Live::start(host, histories, cfg, winhost::core_now(self.start));
+        *self.source.borrow_mut() = Source::Live(Box::new(live));
+    }
+
+    /// The transport has events waiting: hand each to the provider.
+    fn on_hid(&self) {
+        let Some(transport) = self.transport.borrow().clone() else {
+            return;
+        };
+        let events = transport.drain();
+        {
+            let mut source = self.source.borrow_mut();
+            let Some(live) = source.live_mut() else {
+                return;
+            };
+            for event in events {
+                live.on_event(winhost::to_core(event), winhost::core_now(self.start));
+            }
+        }
+        self.after_live(false);
+    }
+
+    /// Takes what the live source changed: the new snapshot (when something shown may differ, or `force`) with
+    /// the balloons the estimators decided on.
+    fn after_live(&self, force: bool) {
+        let now = winhost::core_now(self.start);
+        let taken = {
+            let mut source = self.source.borrow_mut();
+            let Some(live) = source.live_mut() else {
+                return;
+            };
+            if live.take_dirty() || force {
+                Some((live.snapshot(&now), live.take_notices(&now)))
+            } else {
+                None
+            }
+        };
+        if let Some((snap, notices)) = taken {
+            self.apply_with(snap, notices);
+        }
+    }
+
+    fn save_settings(&self) {
+        if let Some(d) = &self.data
+            && let Err(e) = d.write_settings(&self.settings.borrow().encode())
+        {
+            self.trace(&format!("settings not saved: {e}"));
+        }
+    }
+
+    /// Writes the histories and takes the devices offline; runs once, before the tray icon goes.
+    fn flush_live(&self) {
+        if self.live_closed.replace(true) {
+            return;
+        }
+        let now = winhost::core_now(self.start);
+        if let Ok(mut source) = self.source.try_borrow_mut()
+            && let Some(live) = source.live_mut()
+        {
+            live.quit(now);
         }
     }
 
@@ -268,12 +427,22 @@ impl App {
         }
     }
 
-    /// Takes a new snapshot: notices for what changed, the icon and tooltip, the open flyout.
+    /// Takes a snapshot of a source that has no estimators of its own (the demo): the notices come from
+    /// comparing it with the last one.
     fn apply(&self, snap: Snapshot) {
         let notices = self.tracker.borrow_mut().observe(&snap, self.lang);
+        self.apply_with(snap, notices);
+    }
+
+    /// Takes a new snapshot with the notices to show: the icon and tooltip and the open flyout are touched only
+    /// when it differs from the last one (the first one always reaches the tray).
+    fn apply_with(&self, snap: Snapshot, notices: Vec<Notice>) {
+        let changed = *self.snapshot.borrow() != snap;
+        if !changed && notices.is_empty() && self.applied_once.get() {
+            return;
+        }
         let key = self.icon_key(snap.icon);
         let tip = snap.tooltip.clone();
-        let changed = *self.snapshot.borrow() != snap;
         *self.snapshot.borrow_mut() = snap;
         if let Ok(mut t) = self.tray.try_borrow_mut() {
             if let Err(e) = t.update(key, &tip) {
@@ -287,6 +456,7 @@ impl App {
                 self.trace(&format!("balloon ok: {}", shown.is_ok()));
             }
         }
+        self.applied_once.set(true);
         if changed {
             self.refresh_flyout();
         }
@@ -318,7 +488,7 @@ impl App {
             rgb_economy: self.rgb_economy.get(),
             hotkey_text: HOTKEY_TEXT,
             expanded: expanded.as_ref(),
-            empty_text: empty,
+            empty_text: &empty,
             now: clock.wall,
             utc_offset: clock.utc_offset,
         })
@@ -358,6 +528,8 @@ impl App {
             return;
         }
         *self.flyout.borrow_mut() = None;
+        // The forecast texts are as of now, not as of the last event.
+        self.after_live(true);
         *self.expanded.borrow_mut() = view::default_expanded(&self.snapshot.borrow());
         let hwnd = self.hwnd.get();
         let handlers = Handlers {
@@ -400,6 +572,14 @@ impl App {
 
     fn show_menu(&self, at: POINT) {
         menu::style_menus(system::app_theme() == juicebar_ui::model::Theme::Dark);
+        let choices = self
+            .source
+            .borrow_mut()
+            .live_mut()
+            .map(|l| l.devices())
+            .unwrap_or_default();
+        let items: Vec<(String, bool)> =
+            choices.iter().map(|c| (c.name.clone(), c.shown)).collect();
         let command = menu::show(
             self.hwnd.get(),
             at,
@@ -407,6 +587,7 @@ impl App {
             HOTKEY_TEXT,
             runkey::is_enabled(runkey::VALUE),
             self.hotkey_ok.get(),
+            &items,
         );
         match command {
             Some(Command::Open) => self.open_flyout(None),
@@ -414,6 +595,19 @@ impl App {
                 let on = !runkey::is_enabled(runkey::VALUE);
                 if let Err(e) = runkey::set_enabled(runkey::VALUE, &self.exe, on) {
                     self.trace(&format!("run key failed: {e}"));
+                }
+            }
+            Some(Command::Device(i)) => {
+                if let Some(choice) = choices.get(i) {
+                    let hidden = self.source.borrow_mut().live_mut().map(|live| {
+                        live.set_shown(&choice.key, !choice.shown);
+                        live.hidden()
+                    });
+                    if let Some(hidden) = hidden {
+                        self.settings.borrow_mut().hidden = hidden;
+                        self.save_settings();
+                        self.after_live(false);
+                    }
                 }
             }
             Some(Command::Quit) => {
@@ -437,7 +631,14 @@ impl App {
                 self.refresh_flyout();
             }
             FlyoutHit::RgbSwitch => {
-                self.rgb_economy.set(!self.rgb_economy.get());
+                let on = !self.rgb_economy.get();
+                self.rgb_economy.set(on);
+                if let Some(live) = self.source.borrow_mut().live_mut() {
+                    live.set_rgb_economy(on, winhost::core_now(self.start));
+                }
+                self.settings.borrow_mut().rgb_economy = on;
+                self.save_settings();
+                self.after_live(false);
                 self.refresh_flyout();
             }
             FlyoutHit::Gear => {
@@ -471,14 +672,23 @@ impl App {
             let _ = UnregisterHotKey(Some(hwnd), HOTKEY_ID);
         }
         *self.flyout.borrow_mut() = None;
+        // The histories reach their files before the icon goes.
+        self.flush_live();
         if let Ok(mut t) = self.tray.try_borrow_mut() {
             t.remove();
+        }
+        if let Some(t) = self.transport.borrow_mut().take() {
+            t.stop();
         }
     }
 
     fn dispatch(&self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
         if msg == self.msg_open {
             self.open_flyout(None);
+            return Some(LRESULT(0));
+        }
+        if msg == self.msg_hid {
+            self.on_hid();
             return Some(LRESULT(0));
         }
         if msg == self.msg_taskbar {
@@ -709,5 +919,14 @@ mod tests {
         assert_eq!(detect_lang(Some("pt-BR")), Lang::PtBr);
         assert_eq!(detect_lang(Some("en-US")), Lang::En);
         let _ = detect_lang(None);
+    }
+
+    #[test]
+    fn the_windows_display_language_picks_portuguese_for_any_pt() {
+        assert_eq!(lang_from_langid(0x0416), Lang::PtBr, "pt-BR");
+        assert_eq!(lang_from_langid(0x0816), Lang::PtBr, "pt-PT");
+        assert_eq!(lang_from_langid(0x0409), Lang::En, "en-US");
+        assert_eq!(lang_from_langid(0x0C0A), Lang::En, "es");
+        assert_eq!(lang_from_langid(0x0000), Lang::En);
     }
 }
