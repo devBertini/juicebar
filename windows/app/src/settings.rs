@@ -35,6 +35,8 @@
 //!   24 characters; none means the catalog's short name); `.order` is its place in the user's order (0 first).
 //!   A device with no line keeps the defaults: shown, the catalog's name, after the ordered ones. The older
 //!   `hidden=<key>` line is still read.
+//! * `calibrate_until` is the unix second at which the two weeks of battery calibration end (`calib`): set once, at
+//!   the first start of the version that has it, and kept after it passes, so the window never opens again.
 //! * `welcome_seen` is set once the first-open page has been shown, so it never comes back.
 //! * `light` is the level the RGB economy took a device's lighting down from, kept until it is restored, so a run
 //!   that ended with the lighting down still knows what to give back (the core's `SavedLight` text).
@@ -163,6 +165,8 @@ pub struct Settings {
     pub arrangement: Arrangement,
     /// The lighting level kept for each device the economy turned down (device key, `SavedLight` text).
     pub lights: Vec<(DeviceKey, String)>,
+    /// The unix second the battery calibration ends; `None` until the first start of the version that has it.
+    pub calibrate_until: Option<i64>,
 }
 
 impl Default for Settings {
@@ -183,6 +187,7 @@ impl Default for Settings {
             hidden: Vec::new(),
             arrangement: Arrangement::default(),
             lights: Vec::new(),
+            calibrate_until: None,
         }
     }
 }
@@ -235,6 +240,7 @@ impl Settings {
                         s.hidden.push(key);
                     }
                 }
+                ("calibrate_until", v) => s.calibrate_until = v.parse().ok(),
                 ("light", v) => {
                     if let Some((key, text)) = v.split_once(' ') {
                         let key = DeviceKey(key.trim().to_string());
@@ -331,6 +337,9 @@ impl Settings {
         for (key, text) in &self.lights {
             out.push_str(&format!("light={} {}\n", key.0, text));
         }
+        if let Some(until) = self.calibrate_until {
+            out.push_str(&format!("calibrate_until={until}\n"));
+        }
         out
     }
 
@@ -392,6 +401,21 @@ impl Settings {
 mod tests {
     use super::*;
     use juicebar_ui::settings::Chord;
+
+    #[test]
+    fn the_calibration_end_is_kept_and_a_file_without_it_has_none() {
+        assert_eq!(Settings::default().calibrate_until, None);
+        assert_eq!(Settings::parse("rgb_economy=1\n").calibrate_until, None);
+        let s = Settings::parse("calibrate_until=1794245400\n");
+        assert_eq!(s.calibrate_until, Some(1_794_245_400));
+        assert!(s.encode().ends_with("calibrate_until=1794245400\n"));
+        assert_eq!(Settings::parse(&s.encode()), s);
+        assert_eq!(
+            Settings::parse("calibrate_until=soon\n").calibrate_until,
+            None
+        );
+        assert!(!Settings::default().encode().contains("calibrate_until"));
+    }
 
     #[test]
     fn a_missing_or_empty_file_is_the_defaults() {
@@ -462,11 +486,12 @@ mod tests {
                 DeviceKey("logitech-hidpp:40B5".into()),
                 "brightness:13".into(),
             )],
+            calibrate_until: Some(1_794_245_400),
         };
         let text = s.encode();
         assert_eq!(
             text,
-            "rgb_economy=1\nwelcome_seen=1\ntheme=dark\nicon_animation=0\ngreen_above=70\nred_below=35\nwarn_below=25\nsmart_warning=0\nfull_notice=0\ndo_not_disturb=1\nlanguage=pt-BR\nhotkey=Alt+Win+F11\ndevice.logitech-hidpp:40B5.name=Teclado\ndevice.logitech-hidpp:40B5.order=0\ndevice.logitech-hidpp:0AB5.shown=0\ndevice.logitech-hidpp:0AB5.order=1\ndevice.os-bluetooth:ab:cd.shown=0\nlight=logitech-hidpp:40B5 brightness:13\n"
+            "rgb_economy=1\nwelcome_seen=1\ntheme=dark\nicon_animation=0\ngreen_above=70\nred_below=35\nwarn_below=25\nsmart_warning=0\nfull_notice=0\ndo_not_disturb=1\nlanguage=pt-BR\nhotkey=Alt+Win+F11\ndevice.logitech-hidpp:40B5.name=Teclado\ndevice.logitech-hidpp:40B5.order=0\ndevice.logitech-hidpp:0AB5.shown=0\ndevice.logitech-hidpp:0AB5.order=1\ndevice.os-bluetooth:ab:cd.shown=0\nlight=logitech-hidpp:40B5 brightness:13\ncalibrate_until=1794245400\n"
         );
         assert_eq!(Settings::parse(&text), s);
         // Each choice of the two enumerations survives a round trip on its own.

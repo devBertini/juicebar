@@ -63,6 +63,11 @@ impl DataDir {
         self.root.join("settings.txt")
     }
 
+    /// Where the battery calibration keeps its lines, one `<model>.tsv` per model (`calib`).
+    pub fn calibration_dir(&self) -> PathBuf {
+        self.root.join("calibration")
+    }
+
     fn history_dir(&self) -> PathBuf {
         self.root.join("history")
     }
@@ -151,6 +156,15 @@ mod tests {
 
     fn key(s: &str) -> DeviceKey {
         DeviceKey(s.to_string())
+    }
+
+    #[test]
+    fn the_calibration_folder_is_under_the_data_folder() {
+        let d = DataDir::at(PathBuf::from("x").join("JuiceBar"));
+        assert_eq!(
+            d.calibration_dir(),
+            PathBuf::from("x").join("JuiceBar").join("calibration")
+        );
     }
 
     #[test]

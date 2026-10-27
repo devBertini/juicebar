@@ -7,6 +7,7 @@
 mod anim;
 mod app;
 mod args;
+mod calib;
 mod controllers;
 mod devices;
 mod files;

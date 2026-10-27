@@ -45,6 +45,7 @@ pub mod row {
     pub const PRIVACY: RowId = 16;
     pub const HOTKEY_RESET: RowId = 17;
     pub const DEVICES_NOTE: RowId = 18;
+    pub const CALIBRATION: RowId = 19;
     /// The first id of the device rows.
     pub const DEVICE_BASE: RowId = 100;
 }
@@ -103,6 +104,8 @@ pub struct PageInput<'a> {
     pub rename: Option<&'a Rename>,
     /// The limit that the last change of the other one moved; its row says so.
     pub adjusted: Option<Adjusted>,
+    /// `dd/mm` of the day the battery calibration ends, while it runs.
+    pub calibration_ends: Option<String>,
 }
 
 /// What a row asks the app to do.
@@ -239,6 +242,26 @@ pub fn build(i: &PageInput<'_>) -> UiSettings {
         ));
     }
 
+    let mut about = vec![
+        SettingsRow::identity(
+            row::ABOUT,
+            strings::get(lang, id::PANEL_TITLE),
+            &strings::fmt(lang, id::ABOUT_VERSION, &[env!("CARGO_PKG_VERSION")]),
+            t(id::WELCOME_CREDIT),
+            t(id::ABOUT_AUTHOR),
+        ),
+        SettingsRow::link(row::GITHUB, t(id::ABOUT_GITHUB), ""),
+        SettingsRow::link(row::LICENSE, t(id::ABOUT_LICENSE), "")
+            .with_detail(t(id::ABOUT_LICENSE_DETAIL)),
+        SettingsRow::note(row::PRIVACY, t(id::ABOUT_PRIVACY)),
+    ];
+    if let Some(date) = &i.calibration_ends {
+        about.push(SettingsRow::note(
+            row::CALIBRATION,
+            &strings::fmt(lang, id::ABOUT_CALIBRATING, &[date]),
+        ));
+    }
+
     let mut page = UiSettings::new(
         t(id::MENU_SETTINGS),
         vec![
@@ -264,22 +287,7 @@ pub fn build(i: &PageInput<'_>) -> UiSettings {
             ),
             SettingsSection::new(t(id::SEC_DEVICES), device_rows(i)),
             SettingsSection::new(t(id::SEC_GENERAL), general),
-            SettingsSection::new(
-                t(id::SEC_ABOUT),
-                vec![
-                    SettingsRow::identity(
-                        row::ABOUT,
-                        strings::get(lang, id::PANEL_TITLE),
-                        &strings::fmt(lang, id::ABOUT_VERSION, &[env!("CARGO_PKG_VERSION")]),
-                        t(id::WELCOME_CREDIT),
-                        t(id::ABOUT_AUTHOR),
-                    ),
-                    SettingsRow::link(row::GITHUB, t(id::ABOUT_GITHUB), ""),
-                    SettingsRow::link(row::LICENSE, t(id::ABOUT_LICENSE), "")
-                        .with_detail(t(id::ABOUT_LICENSE_DETAIL)),
-                    SettingsRow::note(row::PRIVACY, t(id::ABOUT_PRIVACY)),
-                ],
-            ),
+            SettingsSection::new(t(id::SEC_ABOUT), about),
         ],
     );
     page.capturing = i.hotkey_state.waits();
@@ -412,6 +420,7 @@ mod tests {
             devices: &[],
             rename: None,
             adjusted,
+            calibration_ends: None,
         })
     }
 
@@ -464,6 +473,7 @@ mod tests {
             devices,
             rename,
             adjusted: None,
+            calibration_ends: None,
         })
     }
 
@@ -636,6 +646,43 @@ mod tests {
     }
 
     #[test]
+    fn the_about_section_says_until_when_the_batteries_are_calibrated_and_only_then() {
+        let with = |lang, ends: Option<&str>| {
+            build(&PageInput {
+                settings: &Settings::default(),
+                lang,
+                autostart: true,
+                autostart_locked: false,
+                transparency: true,
+                hotkey: Hotkey::DEFAULT,
+                hotkey_ok: true,
+                hotkey_state: HotkeyState::Idle,
+                devices: &[],
+                rename: None,
+                adjusted: None,
+                calibration_ends: ends.map(str::to_string),
+            })
+        };
+        assert!(with(Lang::PtBr, None).row(row::CALIBRATION).is_none());
+        assert_eq!(
+            with(Lang::PtBr, Some("09/11"))
+                .row(row::CALIBRATION)
+                .unwrap()
+                .label,
+            "Calibrando as baterias até 09/11"
+        );
+        assert_eq!(
+            with(Lang::En, Some("09/11"))
+                .row(row::CALIBRATION)
+                .unwrap()
+                .label,
+            "Calibrating the batteries until 09/11"
+        );
+        let p = with(Lang::PtBr, Some("09/11"));
+        assert_eq!(action(&p, row::CALIBRATION, PART_ROW), None);
+    }
+
+    #[test]
     fn a_segment_click_picks_the_theme_and_the_language() {
         let p = page();
         assert_eq!(
@@ -754,6 +801,7 @@ mod tests {
             devices: &[],
             rename: None,
             adjusted: None,
+            calibration_ends: None,
         });
         assert_eq!(
             p.row(row::HOTKEY).unwrap().detail.as_deref(),
@@ -1168,6 +1216,7 @@ mod tests {
                 devices: &[],
                 rename: None,
                 adjusted: None,
+                calibration_ends: None,
             })
         };
         let plain = page(false, Lang::PtBr);

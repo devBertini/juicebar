@@ -20,7 +20,8 @@ use juicebar_core::snapshot::{
 use juicebar_core::store::Tracker;
 use juicebar_core::strings::{self, Lang, id};
 use juicebar_core::types::{
-    Action, DeviceInfo, DeviceKey, Kind, Now, Presence, ProviderEvent, TransportEvent,
+    Action, Charging, DeviceInfo, DeviceKey, Kind, Now, Presence, ProviderEvent, Quality,
+    TransportEvent,
 };
 
 use crate::notify::Notice;
@@ -42,6 +43,8 @@ pub trait Host {
         false
     }
     fn log(&mut self, _line: &str) {}
+    /// A voltage reading of a device at wall second `wall`: the battery calibration may take a sample beside it.
+    fn calibrate(&mut self, _key: &DeviceKey, _millivolts: u16, _charging: bool, _wall: i64) {}
 }
 
 /// What the user decided about the icon's colors and the alerts (the Settings page); live-changeable.
@@ -588,6 +591,12 @@ impl<H: Host> Live<H> {
                 t.history.utc_offset = i64::from(now.utc_offset);
                 let (notices, lines) = t.on_reading(Reading::from_battery(&b), now.mono);
                 self.after_tracker(&key, notices, lines, *now);
+                if b.quality == Quality::Derived
+                    && let Some(mv) = b.millivolts
+                {
+                    let charging = b.charging == Charging::Charging;
+                    self.host.calibrate(&key, mv, charging, wall_of(now));
+                }
             }
         }
     }
@@ -797,6 +806,7 @@ mod tests {
         logs: Vec<String>,
         log_on: bool,
         refuse_send: bool,
+        calibrated: Vec<(DeviceKey, u16, bool, i64)>,
     }
 
     impl Host for Fake {
@@ -821,6 +831,10 @@ mod tests {
         }
         fn log(&mut self, line: &str) {
             self.logs.push(line.to_string());
+        }
+        fn calibrate(&mut self, key: &DeviceKey, millivolts: u16, charging: bool, wall: i64) {
+            self.calibrated
+                .push((key.clone(), millivolts, charging, wall));
         }
     }
 
@@ -933,6 +947,48 @@ mod tests {
         );
         assert!(written.last().unwrap().starts_with("S "));
         assert!(!written.iter().any(|w| w.starts_with("R ")));
+    }
+
+    fn voltage(
+        key: &DeviceKey,
+        mv: u16,
+        charging: Charging,
+        quality: Quality,
+        secs: f64,
+    ) -> Action {
+        Action::Emit(ProviderEvent::Battery(
+            key.clone(),
+            BatteryReading {
+                at: T0 + secs,
+                percent: Some(77.0),
+                coarse: None,
+                millivolts: Some(mv),
+                charging,
+                quality,
+            },
+        ))
+    }
+
+    #[test]
+    fn a_derived_reading_offers_a_calibration_sample_and_no_other_does() {
+        let mut l = live(vec![]);
+        l.execute(
+            vec![
+                appear(&g703(), "G703"),
+                voltage(&g703(), 3968, Charging::Discharging, Quality::Derived, 1.0),
+                voltage(&g703(), 4010, Charging::Charging, Quality::Derived, 2.0),
+                voltage(&g703(), 3900, Charging::Discharging, Quality::Exact, 3.0),
+                voltage(&g703(), 3900, Charging::Discharging, Quality::Coarse, 4.0),
+                battery(&g703(), 60.0, Charging::Discharging, 5.0),
+            ],
+            at(6.0),
+        );
+        // The sample is stamped with the moment the app handled the reading.
+        let wall = (T0 + 6.0) as i64;
+        assert_eq!(
+            l.host().calibrated,
+            vec![(g703(), 3968, false, wall), (g703(), 4010, true, wall),]
+        );
     }
 
     #[test]
