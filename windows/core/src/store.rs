@@ -585,7 +585,9 @@ impl Tracker {
             ),
             |p| (p.rated_use_hours(), p.rated_charge_hours()),
         );
-        let history = record.history(name, u, c, utc_offset, lang);
+        let mut history = record.history(name, u, c, utc_offset, lang);
+        // The prior follows the RGB economy setting (spec/estimator.md, "Model prior").
+        history.rated_use_hours_rgb = priors.and_then(Priors::rated_use_hours_rgb);
         Ok(Tracker {
             history,
             record,
@@ -903,6 +905,22 @@ mod tests {
         let (_, _) = t.on_reading(reading(1800, 75.0, Charging::Discharging), 610.0);
         let out = t.flush(611.0).expect("pending lines");
         assert!(out.iter().any(|l| l == "R 1800 75 d e -"));
+    }
+
+    #[test]
+    fn restore_keeps_the_rated_use_with_lighting() {
+        let off = -10_800;
+        let priors = estimator::priors_for_model("G703 LIGHTSPEED");
+        assert!(priors.is_some(), "the catalog has the G703");
+        let t = Tracker::for_model("G703", priors, off, Lang::PtBr);
+        let text = t.record.encode_text();
+        let back = Tracker::restore(&text, "G703", priors, 1_793_016_000, off, Lang::PtBr)
+            .expect("restores");
+        assert_eq!(
+            back.history.rated_use_hours_rgb,
+            t.history.rated_use_hours_rgb
+        );
+        assert_eq!(back.history.rated_use_hours_rgb, Some(22.0));
     }
 
     #[test]

@@ -144,9 +144,18 @@ pub struct Priors {
 }
 
 impl Priors {
-    /// Rated hours of use (lighting off), 20 h when unknown.
+    /// Rated hours of use while the RGB economy is on (`use_h`; the other figure when it is the only one),
+    /// 20 h when unknown.
     pub fn rated_use_hours(&self) -> f64 {
-        self.use_h.unwrap_or(DEFAULT_RATED_USE_HOURS)
+        self.use_h
+            .or(self.use_h_rgb)
+            .unwrap_or(DEFAULT_RATED_USE_HOURS)
+    }
+
+    /// Rated hours of use while the RGB economy is off (`use_h_rgb`), `None` when the catalog has one figure
+    /// at most, which then serves both settings.
+    pub fn rated_use_hours_rgb(&self) -> Option<f64> {
+        self.use_h_rgb.filter(|_| self.use_h.is_some())
     }
 
     /// Rated hours to charge, 2.5 h when unknown.
@@ -265,7 +274,10 @@ pub fn default_profile() -> Vec<f64> {
 #[derive(Clone, Debug)]
 pub struct DeviceHistory {
     pub name: String,
+    /// Rated hours of use while the RGB economy is on.
     pub rated_use_hours: f64,
+    /// Rated hours of use while the RGB economy is off; `None`: `rated_use_hours` serves both settings.
+    pub rated_use_hours_rgb: Option<f64>,
     pub rated_charge_hours: f64,
     pub utc_offset: i64,
     /// The language of the texts of notices (the text functions take their own).
@@ -305,6 +317,7 @@ impl DeviceHistory {
         DeviceHistory {
             name: name.to_string(),
             rated_use_hours,
+            rated_use_hours_rgb: None,
             rated_charge_hours,
             utc_offset,
             lang: Lang::En,
@@ -335,7 +348,9 @@ impl DeviceHistory {
         let (u, c) = priors.map_or((DEFAULT_RATED_USE_HOURS, DEFAULT_RATED_CHARGE_HOURS), |p| {
             (p.rated_use_hours(), p.rated_charge_hours())
         });
-        DeviceHistory::new(name, u, c, utc_offset)
+        let mut h = DeviceHistory::new(name, u, c, utc_offset);
+        h.rated_use_hours_rgb = priors.and_then(Priors::rated_use_hours_rgb);
+        h
     }
 
     // -- state
@@ -678,7 +693,11 @@ fn blend(rate: Option<f64>, weight: f64, r: f64, hours: f64) -> (f64, f64) {
 
 /// Percent per hour of use: `(w R + 3 P) / (w + 3)`, `P = 100 / rated hours of use`.
 pub fn discharge_rate(h: &DeviceHistory) -> f64 {
-    let prior = 100.0 / h.rated_use_hours;
+    let rated = match h.rated_use_hours_rgb {
+        Some(rgb_off) if !h.rgb => rgb_off,
+        _ => h.rated_use_hours,
+    };
+    let prior = 100.0 / rated;
     match h.r {
         None => prior,
         Some(r) => (h.w * r + PRIOR_WEIGHT * prior) / (h.w + PRIOR_WEIGHT),
