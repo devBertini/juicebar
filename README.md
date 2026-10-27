@@ -4,15 +4,15 @@
 
 *Idealizado por Claudio Bertini ([devBertini](https://github.com/devBertini)).*
 
-> Português: o JuiceBar mostra, ao lado do relógio, quais dos seus periféricos sem fio estão ligados, a bateria de cada um e quando ela vai acabar. Um único ícone (um copo de suco) muda de cor conforme as baterias; um clique abre o painel com a previsão em horas de uso, gráfico de 7 dias, uso de hoje e saúde da bateria. Leve, sem rede e de código aberto.
+> Português: o JuiceBar mostra, ao lado do relógio, quais dos seus periféricos sem fio estão ligados, a bateria de cada um e quando ela vai acabar. Um único ícone (um copo de suco) muda de cor conforme as baterias; um clique abre o painel com a previsão em horas de uso, gráfico de 7 dias, uso de hoje e saúde da bateria. Leve, nada sai do seu computador, e de código aberto.
 
 ## Why
 
-Vendor software that shows these batteries can keep more than a hundred megabytes resident (one measured at 171 MB) and still does not tell you when a battery will run out. JuiceBar talks to the devices itself and stays out of the way:
+Vendor software that shows these batteries can keep more than a hundred megabytes resident and still does not tell you when a battery will run out. JuiceBar talks to the devices itself and stays out of the way:
 
-- about **4 MB** of private memory and **0.01 %** of one CPU core while idle (measured over 10 minutes on a Windows 11 laptop);
+- about **8 MB** of memory (working set; 4 MB private) and **0.01 %** of one CPU core while idle, measured over 10 minutes on a Windows 11 laptop where the vendor's software held 171 MB;
 - no polling loop: devices report their state and JuiceBar sleeps until something changes;
-- **no network and no telemetry**: everything stays on your computer;
+- **nothing leaves your computer**: no internet access and no telemetry;
 - one executable of about 1.2 MB; written in Rust, with Microsoft's `windows` crate as its only dependency.
 
 ## What it does
