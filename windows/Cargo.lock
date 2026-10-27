@@ -7,6 +7,7 @@ name = "juicebar"
 version = "0.1.0"
 dependencies = [
  "juicebar-core",
+ "juicebar-hid",
  "juicebar-ui",
  "windows",
 ]

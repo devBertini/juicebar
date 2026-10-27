@@ -1,10 +1,13 @@
 // Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
-//! Where the snapshot comes from. W5a has two sources: "no devices yet" and the demo devices of
-//! `docs/design/harness/sample-state.js` (hand-ported). W5b adds the one wired to the core.
+//! Where the snapshot comes from: the real devices through the core (`Live`, the default), the demo
+//! devices of `docs/design/harness/sample-state.js` (hand-ported), or "no devices yet".
 
 use juicebar_core::snapshot::{ChartPoint, DeviceView, Forecast, IconState, Snapshot, tooltip};
 use juicebar_core::strings::{self, Lang, id};
-use juicebar_core::types::{DeviceKey, Kind};
+use juicebar_core::types::{DeviceKey, Kind, Now};
+
+use crate::live::Live;
+use crate::winhost::WinHost;
 
 /// Wall time and the local offset, both read by the shell and passed in (the core never reads a clock).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,12 +78,14 @@ pub const CYCLE_MS: u32 = 10_000;
 
 /// What feeds the shell its snapshots.
 pub enum Source {
-    /// No device known yet (W5b replaces this with the core).
+    /// No device known yet (`--empty`, and the instant before the live source starts).
     Empty,
     Demo {
         phase: DemoPhase,
         cycle: bool,
     },
+    /// The real devices, through the core.
+    Live(Box<Live<WinHost>>),
 }
 
 impl Source {
@@ -88,6 +93,18 @@ impl Source {
         match self {
             Source::Empty => empty_snapshot(lang),
             Source::Demo { phase, .. } => demo_snapshot(*phase, clock, lang),
+            Source::Live(live) => live.snapshot(&Now {
+                wall: clock.wall as f64,
+                mono: 0.0,
+                utc_offset: clock.utc_offset,
+            }),
+        }
+    }
+
+    pub fn live_mut(&mut self) -> Option<&mut Live<WinHost>> {
+        match self {
+            Source::Live(live) => Some(live),
+            _ => None,
         }
     }
 

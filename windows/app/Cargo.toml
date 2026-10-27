@@ -16,6 +16,7 @@ path = "examples/drive.rs"
 
 [dependencies]
 juicebar-core = { path = "../core" }
+juicebar-hid = { path = "../hid" }
 juicebar-ui = { path = "../ui" }
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",

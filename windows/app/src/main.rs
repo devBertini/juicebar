@@ -1,17 +1,21 @@
 // Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
 //! JuiceBar for Windows: one tray icon, a flyout above it, notices, the Ctrl+Alt+B hotkey.
-//! W5a is the shell, fed by a demo source; the devices are wired in W5b.
+//! The shell is fed by the real devices through the core (`live`), or by a demo source.
 #![windows_subsystem = "windows"]
 
 mod app;
 mod args;
+mod files;
+mod live;
 mod menu;
 mod notify;
 mod runkey;
+mod settings;
 mod single;
 mod source;
 mod tray;
 mod view;
+mod winhost;
 
 fn main() {
     let args = args::Args::parse(std::env::args().skip(1));
