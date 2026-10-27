@@ -9,6 +9,12 @@ pub const SHORT_LEN: usize = 7;
 pub const LONG_LEN: usize = 20;
 pub const RECEIVER: u8 = 0xFF;
 
+/// HID++ usage pages: 0xFF00 on LIGHTSPEED receivers (short and long reports), 0xFF43 on devices
+/// reached directly, like the G733 dongle (long reports only, device index 0xFF).
+pub fn is_hidpp_page(usage_page: u16) -> bool {
+    usage_page == 0xFF00 || usage_page == 0xFF43
+}
+
 /// Feature IDs the probe knows by name.
 pub const F_FEATURE_SET: u16 = 0x0001;
 pub const F_DEVICE_NAME: u16 = 0x0005;
@@ -350,24 +356,19 @@ pub fn describe_unified_capabilities(p: &[u8]) -> String {
     )
 }
 
-/// 0x1F20 function 0: ADC reading in mV (big endian) and flags. The flag layout is a guess
-/// (bit 0 = charging); the raw flags are always printed next to it.
+/// 0x1F20 function 0: ADC reading in mV (big endian) and a flags byte. Measured on the G733: flags
+/// 0x01 while G HUB reports "not charging", so the charging bit is not known; the flags are kept raw.
 pub fn decode_adc(p: &[u8]) -> Option<Battery> {
     if p.len() < 3 {
         return None;
     }
     let mv = u16::from_be_bytes([p[0], p[1]]);
-    let state = if p[2] & 0x01 != 0 {
-        "charging (guess)"
-    } else {
-        "discharging (guess)"
-    };
     Some(Battery {
         feature: F_ADC_MEASUREMENT,
         percent: None,
         level: None,
         millivolts: Some(mv),
-        state: state.into(),
+        state: format!("flags 0x{:02x} (charging bit not decoded)", p[2]),
     })
 }
 
@@ -636,6 +637,37 @@ mod tests {
     }
 
     #[test]
+    fn long_only_path() {
+        assert!(is_hidpp_page(0xFF00) && is_hidpp_page(0xFF43));
+        assert!(!is_hidpp_page(0xFF13) && !is_hidpp_page(0x000C));
+        // Direct device: index 0xFF, ping sent as a long report (20 bytes), answered by index 0xFF.
+        let ping = Request::feature(RECEIVER, 0, 1, &[0, 0, 0x5A], true);
+        let frame = ping.encode();
+        assert_eq!(frame.len(), LONG_LEN);
+        assert_eq!(
+            hex(&frame),
+            "11ff001d00005a0000000000000000000000000000"
+                .get(..40)
+                .unwrap()
+        );
+        assert!(is_allowed(&ping));
+        let ans = parse_hex("11 ff 00 1d 04 02 5a 00 00 00 00 00 00 00 00 00 00 00 00 00");
+        assert_eq!(classify(&ping, &ans), Reply::Answer(ans[4..].to_vec()));
+        // Index 0xFF register reads still only allowed on the whitelist; a write never is.
+        let write = Request {
+            report_id: LONG_ID,
+            index: RECEIVER,
+            b2: 0x80,
+            b3: 0x00,
+            params: vec![],
+        };
+        assert!(!is_allowed(&write));
+        // A 1.0 style answer for a different software ID stays ignored.
+        let other = parse_hex("11 ff 00 1b 04 02 5a 00 00 00 00 00 00 00 00 00 00 00 00 00");
+        assert_eq!(classify(&ping, &other), Reply::Ignore);
+    }
+
+    #[test]
     fn match_errors() {
         let req = Request::feature(1, 0, 1, &[0, 0, 0x5A], false);
         // HID++ 1.0 device answers the 2.0 ping with a 1.0 error, invalid sub-id
@@ -680,6 +712,7 @@ mod tests {
         );
         let b = decode_adc(&[0x0C, 0xE4, 0x00, 0]).unwrap();
         assert_eq!(b.millivolts, Some(3300));
+        assert!(b.state.contains("flags 0x00"));
         assert!(decode_battery_status(&[1, 2]).is_none());
     }
 
@@ -853,6 +886,31 @@ mod tests {
             (b.percent, b.level.as_deref(), b.state.as_str()),
             (Some(49), Some("good"), "discharging")
         );
+    }
+
+    #[test]
+    fn captured_g733_adc_long_only() {
+        const G733: &str = include_str!("../../../spec/fixtures/windows-0afe-g733.hidtrace");
+        let p = pairs(G733);
+        assert!(p.len() >= 20, "{} pairs", p.len());
+        for (sent, recv) in &p {
+            let req = request_of(sent);
+            assert_eq!(sent.len(), LONG_LEN, "long reports only");
+            assert_eq!(sent[1], RECEIVER, "direct device index");
+            assert!(is_allowed(&req));
+            assert_ne!(classify(&req, recv), Reply::Ignore);
+        }
+        let (s, r) = p
+            .iter()
+            .find(|(s, _)| hex(s) == "11ff080d00000000000000000000000000000000")
+            .unwrap();
+        let Reply::Answer(a) = classify(&request_of(s), r) else {
+            panic!()
+        };
+        let b = decode_adc(&a).unwrap();
+        assert_eq!(b.feature, F_ADC_MEASUREMENT);
+        assert_eq!(b.millivolts, Some(0x0EA8));
+        assert_eq!(a[2], 0x01);
     }
 
     #[test]

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+  <title>JuiceBar, charging</title>
+  <mask id="bolt" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16">
+    <rect width="16" height="16" fill="#fff"/>
+    <path d="M8.6 10.2 L6.5 12.4 H7.7 L7.1 13.8 L9.3 11.6 H8.1 Z" fill="#000"/>
+  </mask>
+  <path d="M4.2 9.5 H11.55 L10.75 14 H5 Z" mask="url(#bolt)"/>
+  <path d="M3.5 4.75 L5 14.25 H10.75 L12.25 4.75" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M7.25 9.5 L9 2 H13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

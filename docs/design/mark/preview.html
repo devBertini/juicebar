@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>JuiceBar mark preview</title>
+<link rel="stylesheet" href="../harness/frame.css">
+<style>
+  body.plates { width: 600px; height: 300px; display: flex; gap: 0; background: #888; overflow: hidden; }
+  .plate { flex: 1; display: flex; flex-direction: column; gap: 22px; align-items: center; justify-content: center; }
+  .plate.l { background: #f3f3f5; color: #1d1d1f; }
+  .plate.d { background: #202024; color: #f5f5f7; }
+  .row { display: flex; gap: 26px; align-items: center; }
+  .row small { font: 11px sans-serif; opacity: .6; width: 28px; }
+  .row svg { display: block; }
+</style>
+</head>
+<body>
+<script>
+/* Usage: preview.html?scene=mac|win|plates&state=normal|warning|charging&theme=light|dark */
+var q = new URLSearchParams(location.search);
+var scene = q.get("scene") || "mac", state = q.get("state") || "normal", n = 0;
+document.body.classList.add(scene === "plates" ? "plates" : "scene-" + scene);
+if (scene !== "plates") document.write('<script src="../harness/frame.js"><\/script>');
+</script>
+<script>
+// Same geometry as spec/design/mark/*.svg (kept in sync by hand).
+var glass = '<path d="M3.5 4.75 L5 14.25 H10.75 L12.25 4.75" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/><path d="M7.25 9.5 L9 2 H13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>';
+function mark(st, size) {
+  var id = "b" + (n++), juice = "M4.2 9.5 H11.55 L10.75 14 H5 Z", inner;
+  if (st === "warning") inner = '<path d="' + juice + '" fill="#ff3b30"/>' + glass;
+  else if (st === "charging") inner = '<mask id="' + id + '" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16"><rect width="16" height="16" fill="#fff"/><path d="M8.6 10.2 L6.5 12.4 H7.7 L7.1 13.8 L9.3 11.6 H8.1 Z" fill="#000"/></mask><path d="' + juice + '" mask="url(#' + id + ')"/>' + glass;
+  else inner = '<path d="' + juice + '"/>' + glass;
+  return '<svg viewBox="0 0 16 16" width="' + size + '" height="' + size + '" fill="currentColor">' + inner + "</svg>";
+}
+if (scene === "mac") {
+  document.getElementById("bar-item").innerHTML = '<div style="width:26px;height:24px;display:flex;align-items:center;justify-content:center">' + mark(state, 16) + "</div>";
+} else if (scene === "win") {
+  document.getElementById("tray").innerHTML = '<div>' + mark(state, 16) + "</div>";
+} else {
+  document.documentElement.setAttribute("data-theme", "light");
+  var h = "";
+  ["l", "d"].forEach(function (p) {
+    h += '<div class="plate ' + p + '">';
+    [16, 32, 64].forEach(function (s) {
+      h += '<div class="row"><small>' + s + '</small>' + mark("normal", s) + mark("warning", s) + mark("charging", s) + "</div>";
+    });
+    h += "</div>";
+  });
+  document.body.innerHTML = h;
+}
+</script>
+</body>
+</html>

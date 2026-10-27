@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+  <title>JuiceBar, warning</title>
+  <path d="M4.2 9.5 H11.55 L10.75 14 H5 Z" fill="#ff3b30"/>
+  <path d="M3.5 4.75 L5 14.25 H10.75 L12.25 4.75" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M7.25 9.5 L9 2 H13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

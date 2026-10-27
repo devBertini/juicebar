@@ -108,8 +108,24 @@ const TIMEOUT: Duration = Duration::from_millis(1500);
 /// A sleeping keyboard needs about 1.5 s to answer the first request (measured), so the ping waits longer.
 const PING_TIMEOUT: Duration = Duration::from_millis(4000);
 
+/// True when no collection takes 7-byte reports: a direct device (device index 0xFF), long reports only.
+fn long_only(hub: &Hub) -> bool {
+    !hub.ports
+        .iter()
+        .any(|p| p.caps.output_len as usize == SHORT_LEN)
+}
+
 fn probe_receiver(hub: &mut Hub, tr: &mut Trace) -> Known {
     let mut known = Known::default();
+    if long_only(hub) {
+        tr.note(
+            "direct device on a long-only collection: no receiver registers, device index 0xFF",
+        );
+        if probe_device(hub, tr, RECEIVER, &mut known) {
+            known.online.push(RECEIVER);
+        }
+        return known;
+    }
     tr.note("receiver: register 0x02 short read (connection state)");
     let o = exchange(
         hub,
@@ -201,7 +217,8 @@ fn get_feature(hub: &mut Hub, tr: &mut Trace, idx: u8, id: u16) -> Option<(u8, u
 
 /// Returns true when the device answered the ping.
 fn probe_device(hub: &mut Hub, tr: &mut Trace, idx: u8, known: &mut Known) -> bool {
-    let ping = Request::feature(idx, 0, 1, &[0, 0, 0x5A], false);
+    // A long-only collection (the G733 dongle, usage page 0xFF43) takes the ping as a long report.
+    let ping = Request::feature(idx, 0, 1, &[0, 0, 0x5A], long_only(hub));
     match exchange(hub, tr, &ping, PING_TIMEOUT) {
         Outcome::Answer(p) => match decode_ping(&p) {
             Some((maj, min, echo)) => {
@@ -520,12 +537,12 @@ fn main() {
         return;
     }
 
-    // Vendor-defined collections (usage page 0xFF00) that opened and carry reports of 7 bytes or more.
+    // HID++ collections (usage page 0xFF00 on receivers, 0xFF43 on direct devices) that opened and carry reports of 7 bytes or more.
     let mut pids: Vec<u16> = entries
         .iter()
         .filter(|e| {
             e.open_rw.is_ok()
-                && matches!(&e.caps, Some(c) if c.usage_page == 0xFF00 && c.input_len >= 7)
+                && matches!(&e.caps, Some(c) if is_hidpp_page(c.usage_page) && c.input_len >= 7)
                 && opts.pid.is_none_or(|p| p == e.pid)
         })
         .map(|e| e.pid)
@@ -551,7 +568,7 @@ fn main() {
             .filter(|e| {
                 e.pid == pid
                     && e.open_rw.is_ok()
-                    && matches!(&e.caps, Some(c) if c.usage_page == 0xFF00 && c.input_len >= 7)
+                    && matches!(&e.caps, Some(c) if is_hidpp_page(c.usage_page) && c.input_len >= 7)
             })
             .filter_map(|e| Port::open(e).ok())
             .collect();
