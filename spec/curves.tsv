@@ -1,0 +1,12 @@
+# JuiceBar voltage-to-percent curves, read by both apps' cores (spec/PROTOCOL.md, quality "derived").
+# Linear interpolation between points, clamped to 0 and 100; points sorted by millivolts, percent rising with them.
+# INTERIM: each curve holds one measured point (the device's voltage beside G HUB's percent, docs/research/probe-windows.md,
+# 26/10/2026) between a full single-cell lithium charge (4200 mV = 100) and a provisional empty point. Plan stage K1
+# replaces every curve with at least 15 measured points; no table is copied from another project.
+curve	millivolts	percent	source
+g703	3500	0	provisional empty point
+g703	3968	77	measured: 3966 to 3970 mV while G HUB showed 77 %
+g703	4200	100	full charge of a lithium cell
+g733	3400	0	provisional empty point
+g733	3753	45	measured: 3752 to 3754 mV while G HUB showed 45 %
+g733	4200	100	full charge of a lithium cell
