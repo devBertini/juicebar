@@ -25,7 +25,7 @@ QUALITY_CODE = {"e": est.EXACT, "d": est.DERIVED, "c": est.COARSE}
 STATE_LETTER = {v: k for k, v in STATE_CODE.items()}
 QUALITY_LETTER = {v: k for k, v in QUALITY_CODE.items()}
 
-INPUT_COLUMNS = ["name", "device", "rated_use", "rated_charge", "utc_offset", "now", "events"]
+INPUT_COLUMNS = ["name", "device", "rated_use", "rated_use_rgb", "rated_charge", "utc_offset", "now", "events"]
 OUTPUT_COLUMNS = [
     "level", "online", "rate", "observed_hours", "label", "hours_left", "hours_left_text",
     "forecast_text", "eta", "eta_text", "charge_rate", "full_hours", "full_in_text",
@@ -43,6 +43,8 @@ HEADER = """\
 #   name          scenario id.
 #   device        display name (used in the low-battery text "<device> com <n> %").
 #   rated_use     rated hours of use (model prior: percent per hour = 100 / rated_use).
+#   rated_use_rgb rated hours of use while the RGB economy is off ('-': none, rated_use serves both settings).
+#                 The prior follows the setting in force at `now`: rated_use_rgb while off, rated_use while on.
 #   rated_charge  rated hours to charge (prior charge rate = 120 / rated_charge, percent per wall-clock hour).
 #   utc_offset    local UTC offset in seconds (-10800 = America/Sao_Paulo). Local time = UTC + offset.
 #   now           the moment every expected value is computed at, seconds since the epoch (UTC).
@@ -86,6 +88,7 @@ class Case(NamedTuple):
     name: str
     device: str
     rated_use: float
+    rated_use_rgb: Optional[float]
     rated_charge: float
     utc_offset: int
     now: int
@@ -133,7 +136,8 @@ def parse_events(text: str) -> List[tuple]:
 
 def replay(case: Case):
     """Applies the case's events; returns (history, notices)."""
-    h = est.DeviceHistory(case.device, case.rated_use, case.rated_charge, case.utc_offset)
+    h = est.DeviceHistory(case.device, case.rated_use, case.rated_charge, case.utc_offset,
+                          rated_use_hours_rgb=case.rated_use_rgb)
     notices = []
     for ev in case.events:
         if ev[0] == "R":
@@ -195,7 +199,9 @@ def evaluate(case: Case) -> Dict[str, str]:
 def row(case: Case) -> List[str]:
     cells = {
         "name": case.name, "device": case.device,
-        "rated_use": _num(case.rated_use), "rated_charge": _num(case.rated_charge),
+        "rated_use": _num(case.rated_use),
+        "rated_use_rgb": "-" if case.rated_use_rgb is None else _num(case.rated_use_rgb),
+        "rated_charge": _num(case.rated_charge),
         "utc_offset": str(case.utc_offset), "now": str(case.now),
         "events": format_events(case.events),
     }
@@ -208,7 +214,8 @@ def parse_row(line: str) -> Dict[str, str]:
 
 
 def case_from_cells(cells: Dict[str, str]) -> Case:
-    return Case(cells["name"], cells["device"], float(cells["rated_use"]), float(cells["rated_charge"]),
+    return Case(cells["name"], cells["device"], float(cells["rated_use"]),
+                None if cells["rated_use_rgb"] == "-" else float(cells["rated_use_rgb"]), float(cells["rated_charge"]),
                 int(cells["utc_offset"]), int(cells["now"]), parse_events(cells["events"]), cells["note"])
 
 
@@ -265,8 +272,8 @@ def t_of(evs):
     return evs[-1][1]
 
 
-def mk(name, events, now, note, device="G703", use=20.0, charge=2.5, off=BRT):
-    return Case(name, device, use, charge, off, now, events, note)
+def mk(name, events, now, note, device="G703", use=20.0, charge=2.5, off=BRT, use_rgb=None):
+    return Case(name, device, use, use_rgb, charge, off, now, events, note)
 
 
 # ---------------------------------------------------------------- the sample devices of the mockups
@@ -374,6 +381,10 @@ def scenarios() -> List[Case]:
                 [P(at(0, 9)), R(at(0, 9), 80), R(at(0, 11), 76), G(at(0, 11)), R(at(0, 12), 74),
                  R(at(0, 14), 70)], at(0, 14),
                 "the 76->74 step is lost: the 74 reading is the new anchor; w=2+2"))
+    c.append(mk("rgb_switch_prior_follows_setting",
+                [P(at(0, 9)), R(at(0, 9), 80), G(at(0, 9, 30))], at(0, 9, 30),
+                "prior 100/22 while off, switched on at 09:30 to 100/30: the rate follows the setting in force",
+                device="G703", use=30.0, use_rgb=22.0))
     c.append(mk("rise_without_charge_reanchors",
                 [P(at(0, 9)), R(at(0, 9), 50), R(at(0, 10), 90), R(at(0, 12), 86)], at(0, 12),
                 "level rose with state discharging: a missed charge, new anchor (reading of the spec gap)"))

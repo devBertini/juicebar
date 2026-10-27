@@ -78,6 +78,36 @@ class DischargeRate(unittest.TestCase):
         self.assertAlmostEqual(e.discharge_rate(hist(rated_use_hours=40.0)), 2.5)
         self.assertAlmostEqual(e.charge_rate(hist(rated_charge_hours=2.0)), 60.0)   # 120 / 2
 
+    def test_prior_with_rgb_economy_off_uses_the_rgb_figure(self):
+        h = hist(rated_use_hours=30.0, rated_use_hours_rgb=20.0)
+        self.assertAlmostEqual(e.discharge_rate(h), 5.0)       # 100 / 20
+
+    def test_prior_with_rgb_economy_on_uses_the_plain_figure(self):
+        h = hist(rated_use_hours=40.0, rated_use_hours_rgb=20.0)
+        h.set_rgb(at(0, 9), True)
+        self.assertAlmostEqual(e.discharge_rate(h), 2.5)       # 100 / 40
+
+    def test_prior_follows_a_switch_in_the_middle(self):
+        h = hist(rated_use_hours=40.0, rated_use_hours_rgb=20.0)
+        self.assertAlmostEqual(e.discharge_rate(h), 5.0)
+        h.set_rgb(at(0, 9), True)
+        self.assertAlmostEqual(e.discharge_rate(h), 2.5)
+        h.set_rgb(at(0, 10), False)
+        self.assertAlmostEqual(e.discharge_rate(h), 5.0)
+
+    def test_prior_blend_uses_the_setting_in_force(self):
+        h = started(at(0, 9), 80, rated_use_hours=40.0, rated_use_hours_rgb=20.0)
+        rd(h, at(0, 11), 76)                                    # R = 2, w = 2
+        self.assertAlmostEqual(e.discharge_rate(h), (2 * 2 + 3 * 5.0) / 5)
+        h.set_rgb(at(0, 11, 30), True)
+        self.assertAlmostEqual(e.discharge_rate(h), (2 * 2 + 3 * 2.5) / 5)
+
+    def test_a_model_with_one_figure_uses_it_in_both_settings(self):
+        h = hist(rated_use_hours=40.0)
+        self.assertAlmostEqual(e.discharge_rate(h), 2.5)
+        h.set_rgb(at(0, 9), True)
+        self.assertAlmostEqual(e.discharge_rate(h), 2.5)
+
     def test_one_point_steps_are_ignored(self):
         h = started(at(0, 9), 80)
         rd(h, at(0, 10), 79)

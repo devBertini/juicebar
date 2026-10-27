@@ -56,6 +56,10 @@ fn replay(case: &Case, lang: Lang) -> (DeviceHistory, Vec<Notice>) {
         case.get("utc_offset").parse().unwrap(),
     );
     h.lang = lang;
+    h.rated_use_hours_rgb = match case.get("rated_use_rgb") {
+        "-" => None,
+        v => Some(v.parse().unwrap()),
+    };
     let mut notices = Vec::new();
     let events = case.get("events");
     if events != "-" {
@@ -160,7 +164,7 @@ fn usage_text(h: &DeviceHistory, now: i64) -> String {
 #[test]
 fn reproduces_every_scenario() {
     let cases = load();
-    assert_eq!(cases.len(), 49, "the cases file holds 49 scenarios");
+    assert_eq!(cases.len(), 50, "the cases file holds 50 scenarios");
     for case in &cases {
         let name = case.name();
         let now: i64 = case.get("now").parse().unwrap();

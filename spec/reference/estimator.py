@@ -138,9 +138,12 @@ class DeviceHistory:
     def __init__(self, name: str = "Device",
                  rated_use_hours: float = DEFAULT_RATED_USE_HOURS,
                  rated_charge_hours: float = DEFAULT_RATED_CHARGE_HOURS,
-                 utc_offset: int = -10800):
+                 utc_offset: int = -10800,
+                 rated_use_hours_rgb: Optional[float] = None):
         self.name = name
-        self.rated_use_hours = rated_use_hours
+        self.rated_use_hours = rated_use_hours          # rated use while the RGB economy is on
+        # rated use while the RGB economy is off (lighting on); None: the one figure serves both
+        self.rated_use_hours_rgb = rated_use_hours_rgb
         self.rated_charge_hours = rated_charge_hours
         self.utc_offset = utc_offset
 
@@ -377,8 +380,10 @@ def _blend(rate: Optional[float], weight: float, r: float, hours: float):
 
 
 def discharge_rate(h: DeviceHistory) -> float:
-    """Percent per hour of use: (w R + 3 P) / (w + 3), P = 100 / rated hours of use."""
-    prior = 100.0 / h.rated_use_hours
+    """Percent per hour of use: (w R + 3 P) / (w + 3), P = 100 / rated hours of use
+    (the figure of the RGB economy setting in force: use_h_rgb while off, use_h while on)."""
+    rated = h.rated_use_hours if h.rgb or h.rated_use_hours_rgb is None else h.rated_use_hours_rgb
+    prior = 100.0 / rated
     if h.R is None:
         return prior
     return (h.w * h.R + PRIOR_WEIGHT * prior) / (h.w + PRIOR_WEIGHT)
