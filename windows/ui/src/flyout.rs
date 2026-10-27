@@ -35,9 +35,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
     GetWindowLongPtrW, IDC_ARROW, IsWindow, LoadCursorW, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    WA_INACTIVE, WM_ACTIVATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_INACTIVE,
+    WM_ACTIVATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
+    WM_NCDESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Error, PCWSTR, Result, w};
 
@@ -68,11 +68,13 @@ struct Inner {
     /// The pixels `WM_PAINT` copies to the window; dropped with the window.
     surface: RefCell<Option<Surface>>,
     scale: Cell<f32>,
+    /// Where the flyout was anchored (the tray icon), to place it again when its height changes.
+    anchor: PxRect,
     hover: Cell<FlyoutHit>,
     tracking: Cell<bool>,
     /// Hide when another window takes the focus (the default); tests and captures turn it off.
     hide_on_deactivate: Cell<bool>,
-    /// True when the DWM backdrop is on; false paints the panel itself.
+    /// True when the DWM backdrop is on and shows the desktop (acrylic); false paints the panel itself.
     backdrop: Cell<bool>,
     handlers: RefCell<Handlers>,
 }
@@ -223,6 +225,7 @@ impl Flyout {
             gfx,
             surface: RefCell::new(None),
             scale: Cell::new(scale),
+            anchor,
             hover: Cell::new(FlyoutHit::None),
             tracking: Cell::new(false),
             hide_on_deactivate: Cell::new(true),
@@ -430,20 +433,28 @@ impl Inner {
             // SAFETY: `m` outlives the call.
             let _ = unsafe { DwmExtendFrameIntoClientArea(hwnd, &m) };
         }
-        self.backdrop.set(ok);
+        // With "Transparency effects" off in Windows the system paints every acrylic backdrop as one flat
+        // solid color, so the glow would sit on a gray slab: paint our own panel instead.
+        self.backdrop
+            .set(ok && crate::system::transparency_enabled());
     }
 
+    /// Resizes the window and places it again against the anchor: a flyout that grows (a card opens, the
+    /// welcome page gives way to the list) keeps its bottom edge above the taskbar instead of running past
+    /// the work area.
     fn resize(&self, w: i32, h: i32) -> Result<()> {
-        // SAFETY: our own window, resized in place.
+        let (_, work, scale) = monitor_of(self.anchor);
+        let (x, y) = place(self.anchor, w, h, work, scale);
+        // SAFETY: our own window, moved and resized in place.
         unsafe {
             SetWindowPos(
                 self.hwnd.get(),
                 None,
-                0,
-                0,
+                x,
+                y,
                 w,
                 h,
-                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE,
+                SWP_NOACTIVATE | SWP_NOZORDER,
             )
         }
     }
@@ -709,6 +720,32 @@ mod tests {
             f.inner.surface.borrow().is_none(),
             "graphics are released with the window"
         );
+    }
+
+    #[test]
+    fn growing_keeps_the_flyout_inside_the_work_area_with_its_bottom_edge_in_place() {
+        let f = open(Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(0)));
+        f.update(UiState::sample_collapsed(Theme::Dark)).unwrap();
+        let small = f.rect().unwrap();
+        // The welcome page, then the whole list with an open card: each taller than the one before.
+        f.update(UiState::sample(Theme::Dark)).unwrap();
+        let tall = f.rect().unwrap();
+        assert!(tall.bottom - tall.top > small.bottom - small.top + 150);
+        let anchor = PxRect {
+            left: 1000,
+            top: 1050,
+            right: 1024,
+            bottom: 1080,
+        };
+        let (_, work, _) = monitor_of(anchor);
+        assert!(
+            tall.bottom <= work.bottom && tall.top >= work.top,
+            "{tall:?} outside {work:?}"
+        );
+        assert_eq!(tall.bottom, small.bottom, "grows upward, bottom edge stays");
+        f.update(UiState::sample_welcome(Theme::Dark)).unwrap();
+        let page = f.rect().unwrap();
+        assert!(page.bottom <= work.bottom && page.top >= work.top);
     }
 
     #[test]

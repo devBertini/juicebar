@@ -4,6 +4,9 @@
 //!
 //! `cargo run -p juicebar-ui --example flyout_demo -- --render <folder>` writes the flyout (light and
 //! dark, 100 % and 150 %) and the tray mark (three states, 16/24/32 px, both taskbar colors).
+//! `--render-w7b <folder>` writes the panel's scenes (`w7b-<scene>-<theme>-<scale>.png`): every card closed, an
+//! open card with the chart and the week bars, a device without a reading, the power saver (i) open with the
+//! G HUB notice, and the welcome page.
 //!
 //! Without `--render` it shows the live flyout above the bottom-right corner of the primary screen
 //! until Esc, a click elsewhere, or `--seconds N`. `--capture <png>` also saves a screenshot of it
@@ -59,6 +62,35 @@ fn render(dir: &Path) -> windows::core::Result<()> {
     let sheet = dir.join("marks-sheet.png");
     icon::render_mark_sheet_png(&sheet)?;
     println!("{}", sheet.display());
+    Ok(())
+}
+
+/// The panel's scenes for the review of the glass look, in both themes at 100 % and 150 %.
+fn render_w7b(dir: &Path) -> windows::core::Result<()> {
+    std::fs::create_dir_all(dir).expect("create the render folder");
+    type Scene = (&'static str, fn(Theme) -> UiState);
+    let scenes: [Scene; 5] = [
+        ("collapsed", UiState::sample_collapsed),
+        ("expanded", UiState::sample),
+        ("noreading", UiState::sample_no_reading),
+        ("footer", |t| {
+            let mut s = UiState::sample_collapsed(t);
+            s.rgb_economy = true;
+            s.info_open = true;
+            s.ghub_notice = Some("o G HUB está reaplicando a iluminação".into());
+            s
+        }),
+        ("welcome", UiState::sample_welcome),
+    ];
+    for (name, make) in scenes {
+        for (theme, tname) in [(Theme::Light, "light"), (Theme::Dark, "dark")] {
+            for (scale, tag) in [(1.0f32, "100"), (1.5, "150")] {
+                let f = dir.join(format!("w7b-{name}-{tname}-{tag}.png"));
+                let (w, h) = render_flyout_png(&make(theme), theme, scale, &f)?;
+                println!("{} {w}x{h}", f.display());
+            }
+        }
+    }
     Ok(())
 }
 
@@ -204,6 +236,9 @@ fn main() -> windows::core::Result<()> {
     };
     if let Some(dir) = value("--render") {
         return render(Path::new(dir));
+    }
+    if let Some(dir) = value("--render-w7b") {
+        return render_w7b(Path::new(dir));
     }
     let seconds = value("--seconds").and_then(|s| s.parse().ok()).unwrap_or(0);
     live(seconds, value("--capture").map(PathBuf::from))

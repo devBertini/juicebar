@@ -7,7 +7,7 @@ use juicebar_core::snapshot::{self, DeviceView, Snapshot};
 use juicebar_core::strings::{self, Lang, id};
 use juicebar_core::types::{DeviceKey, Kind};
 use juicebar_ui::icon::{IconLook, Juice};
-use juicebar_ui::model::{Glyph, IconState, Rgb, Theme, UiDevice, UiLabels, UiState};
+use juicebar_ui::model::{Glyph, IconState, Rgb, Theme, UiDevice, UiLabels, UiState, UiWelcome};
 
 /// Everything besides the snapshot that the flyout depends on.
 pub struct ViewInput<'a> {
@@ -16,7 +16,13 @@ pub struct ViewInput<'a> {
     pub accent: Rgb,
     pub lang: Lang,
     pub rgb_economy: bool,
+    /// The (i) next to the power saver switch was clicked and its text stays open.
+    pub info_open: bool,
     pub hotkey_text: &'a str,
+    /// The line under the footer while G HUB is putting the lighting back.
+    pub ghub_notice: Option<&'a str>,
+    /// Show the first-open page instead of the list.
+    pub welcome: bool,
     /// The device whose detail card is open.
     pub expanded: Option<&'a DeviceKey>,
     /// The text for an empty device list.
@@ -27,7 +33,7 @@ pub struct ViewInput<'a> {
     pub utc_offset: i32,
 }
 
-/// The footer text while a read-back finds G HUB putting the lighting back after the RGB economy turned it down.
+/// The footer line while a read-back finds G HUB putting the lighting back after the power saver turned it down.
 pub fn ghub_notice(lang: Lang) -> &'static str {
     strings::get(lang, id::LIGHTING_REAPPLIED)
 }
@@ -81,6 +87,23 @@ fn weekday(local_secs: i64) -> usize {
     ((local_secs.div_euclid(86_400) + 3).rem_euclid(7)) as usize
 }
 
+/// The weekday of each of the last 7 local days, oldest first; the last one is today (the usage bars' labels).
+pub fn usage_labels(now: i64, utc_offset: i32, lang: Lang) -> [String; 7] {
+    const WD: [&str; 7] = [
+        id::WD_0,
+        id::WD_1,
+        id::WD_2,
+        id::WD_3,
+        id::WD_4,
+        id::WD_5,
+        id::WD_6,
+    ];
+    std::array::from_fn(|i| {
+        let local = now + utc_offset as i64 - (6 - i as i64) * 86_400;
+        strings::get(lang, WD[weekday(local)]).to_string()
+    })
+}
+
 /// The seven labels under the chart, oldest first: the weekday at the middle of each 24 h block
 /// of the 168 h the chart covers.
 pub fn day_labels(now: i64, utc_offset: i32, lang: Lang) -> [String; 7] {
@@ -105,7 +128,6 @@ fn hours_from_now(at: i64, now: i64) -> f32 {
 
 fn ui_device(d: &DeviceView, v: &ViewInput<'_>) -> UiDevice {
     let expanded = v.expanded == Some(&d.key);
-    let percent = d.percent.unwrap_or(0);
     let usage_today = extract_arg(strings::get(v.lang, id::USAGE_TODAY), &d.usage_today)
         .unwrap_or_else(|| d.usage_today.clone());
     // "Saúde da bateria: 92%" -> 92; "...: aprendendo" -> still learning.
@@ -135,14 +157,15 @@ fn ui_device(d: &DeviceView, v: &ViewInput<'_>) -> UiDevice {
         glyph: glyph_for(d.kind),
         connection: d.connection.clone(),
         on: d.on,
-        percent,
-        capsule_fraction: f32::from(percent) / 100.0,
+        percent: d.percent,
+        capsule_fraction: d.percent.map_or(0.0, |p| f32::from(p) / 100.0),
         status_line,
         warning: d.warning.clone(),
         chart,
         forecast_from,
         forecast_empty_hours,
         usage_today,
+        week_hours: d.usage_week.map(|secs| secs as f32 / 3600.0),
         health,
         charging: d.charging,
         expanded,
@@ -156,12 +179,30 @@ pub fn ui_state(v: &ViewInput<'_>) -> UiState {
         accent: v.accent,
         devices: v.snapshot.devices.iter().map(|d| ui_device(d, v)).collect(),
         rgb_economy: v.rgb_economy,
+        info_open: v.info_open,
         hotkey_text: v.hotkey_text.to_string(),
+        ghub_notice: v.ghub_notice.map(str::to_string),
         alert: icon_state(v.snapshot.icon),
+        juice: icon_look(v.snapshot.icon).juice,
         low_threshold: LOW_PERCENT as u8,
         day_labels: day_labels(v.now, v.utc_offset, v.lang),
+        usage_labels: usage_labels(v.now, v.utc_offset, v.lang),
         empty_text: v.empty_text.to_string(),
         labels: labels(v.lang),
+        welcome: v.welcome.then(|| welcome(v.lang)),
+    }
+}
+
+/// The first-open page's texts in the app's language.
+pub fn welcome(lang: Lang) -> UiWelcome {
+    let s = |key| strings::get(lang, key).to_string();
+    UiWelcome {
+        title: s(id::WELCOME_TITLE),
+        body: s(id::WELCOME_BODY),
+        tray_title: s(id::WELCOME_TRAY_TITLE),
+        tray_steps: s(id::WELCOME_TRAY_STEPS),
+        credit: s(id::WELCOME_CREDIT),
+        start: s(id::WELCOME_START),
     }
 }
 
@@ -177,6 +218,8 @@ pub fn labels(lang: Lang) -> UiLabels {
         learning: s(strings::id::HEALTH_LEARNING),
         off_devices: s(strings::id::SECTION_OFF),
         rgb_economy: s(strings::id::RGB_SAVER),
+        rgb_info: s(strings::id::RGB_SAVER_INFO),
+        usage_by_day: s(strings::id::CHART_USAGE_BY_DAY),
     }
 }
 
@@ -198,10 +241,13 @@ mod tests {
         assert_eq!(en.last_7_days, "Last 7 days");
         assert_eq!(en.off_devices, "Off");
         assert_eq!(en.rgb_economy, "Power saver");
+        assert!(en.rgb_info.starts_with("Turns off the lights"));
+        assert_eq!(en.usage_by_day, "Hours of use per day");
         let pt = labels(Lang::PtBr);
         assert_eq!(pt.last_7_days, "Últimos 7 dias");
         assert_eq!(pt.battery_health, "Saúde da bateria");
         assert_eq!(pt.of_use, "de uso");
+        assert_eq!(pt.usage_by_day, "Horas de uso por dia");
     }
     use crate::source::{Clock, DemoPhase, demo_snapshot};
 
@@ -212,7 +258,10 @@ mod tests {
             accent: Rgb(1, 2, 3),
             lang,
             rgb_economy: true,
+            info_open: false,
             hotkey_text: "Ctrl+Alt+B",
+            ghub_notice: None,
+            welcome: false,
             expanded: exp,
             empty_text: "vazio",
             now: DEMO_NOW,
@@ -267,7 +316,7 @@ mod tests {
         let g703 = ui.devices.iter().find(|d| d.name == "G703").unwrap();
         assert_eq!(g703.name, "G703");
         assert_eq!(g703.glyph, Glyph::Mouse);
-        assert_eq!(g703.percent, 23);
+        assert_eq!(g703.percent, Some(23));
         assert!((g703.capsule_fraction - 0.23).abs() < 1e-6);
         assert!(g703.on && g703.expanded && !g703.charging);
         assert_eq!(g703.usage_today, "4 h 10 min");
@@ -336,12 +385,95 @@ mod tests {
     }
 
     #[test]
-    fn a_device_without_a_reading_shows_zero_and_an_empty_capsule() {
+    fn a_device_without_a_reading_shows_a_dash_an_empty_capsule_and_no_red() {
         let mut snap = demo_snapshot(DemoPhase::Normal, &clock(), Lang::PtBr);
         snap.devices[0].percent = None;
         let ui = ui_state(&input(&snap, Lang::PtBr, None));
-        assert_eq!(ui.devices[0].percent, 0);
+        assert_eq!(ui.devices[0].percent, None, "the row draws a dash, not 0");
         assert_eq!(ui.devices[0].capsule_fraction, 0.0);
+        assert!(!ui.is_low(&ui.devices[0]), "no reading is never red");
+    }
+
+    #[test]
+    fn the_week_of_use_reaches_the_bars_in_hours() {
+        let mut snap = demo_snapshot(DemoPhase::Scene, &clock(), Lang::PtBr);
+        snap.devices[0].usage_week = [0, 1800, 3600, 5400, 7200, 9000, 15_000];
+        let ui = ui_state(&input(&snap, Lang::PtBr, None));
+        assert_eq!(
+            ui.devices[0].week_hours,
+            [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 15_000.0 / 3600.0]
+        );
+    }
+
+    #[test]
+    fn the_usage_bars_are_labelled_by_the_last_seven_local_days() {
+        // Monday now: Tuesday of last week to Monday, today last.
+        assert_eq!(
+            usage_labels(DEMO_NOW, -10800, Lang::PtBr),
+            ["ter", "qua", "qui", "sex", "sáb", "dom", "seg"].map(String::from)
+        );
+        assert_eq!(usage_labels(DEMO_NOW, -10800, Lang::En)[6], "Mon");
+        // Just after local midnight the same instant is still the previous local day.
+        assert_eq!(
+            usage_labels(DEMO_NOW + 10 * 3600, -10800, Lang::En)[6],
+            "Tue"
+        );
+    }
+
+    #[test]
+    fn the_glow_takes_the_juice_of_the_tray_mark() {
+        let mut snap = demo_snapshot(DemoPhase::Scene, &clock(), Lang::PtBr);
+        snap.icon = snapshot::IconLook {
+            juice: snapshot::Juice::Green,
+            charging: false,
+        };
+        assert_eq!(
+            ui_state(&input(&snap, Lang::PtBr, None)).juice,
+            Juice::Green
+        );
+        snap.icon.juice = snapshot::Juice::Red;
+        assert_eq!(ui_state(&input(&snap, Lang::PtBr, None)).juice, Juice::Red);
+        snap.icon.juice = snapshot::Juice::Purple;
+        assert_eq!(
+            ui_state(&input(&snap, Lang::PtBr, None)).juice,
+            Juice::Purple
+        );
+    }
+
+    #[test]
+    fn the_footer_carries_the_info_the_notice_and_the_welcome_page_on_request() {
+        let snap = demo_snapshot(DemoPhase::Scene, &clock(), Lang::En);
+        let mut v = input(&snap, Lang::En, None);
+        let plain = ui_state(&v);
+        assert!(plain.welcome.is_none() && plain.ghub_notice.is_none() && !plain.info_open);
+        assert_eq!(
+            plain.hotkey_text, "Ctrl+Alt+B",
+            "the hotkey text stays the hotkey"
+        );
+        assert!(plain.labels.rgb_info.contains("LEDs"));
+        v.info_open = true;
+        v.ghub_notice = Some(ghub_notice(Lang::En));
+        v.welcome = true;
+        let ui = ui_state(&v);
+        assert!(ui.info_open);
+        assert_eq!(ui.ghub_notice.as_deref(), Some(ghub_notice(Lang::En)));
+        assert_eq!(ui.hotkey_text, "Ctrl+Alt+B");
+        let w = ui.welcome.unwrap();
+        assert_eq!(w.title, "Welcome to JuiceBar");
+        assert_eq!(w.start, "Get started");
+        assert_eq!(w.credit, "Created by Claudio Bertini");
+        assert!(w.tray_steps.contains("Other system tray icons"));
+        let pt = welcome(Lang::PtBr);
+        assert_eq!(pt.start, "Começar");
+        assert_eq!(pt.credit, "Idealizado por Claudio Bertini");
+        assert!(
+            pt.tray_steps
+                .contains("Outros ícones da bandeja do sistema")
+        );
+        assert!(
+            pt.tray_steps
+                .contains("Configurações > Personalização > Barra de tarefas")
+        );
     }
 
     #[test]

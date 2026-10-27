@@ -279,6 +279,34 @@ impl Gfx {
         max_h: f32,
         align: Align,
     ) -> Result<Text> {
+        self.text_layout_with(s, fmt, max_w, max_h, align, false)
+    }
+
+    /// Text that breaks into lines at `max_w`: its `h` is the height of all the lines.
+    pub fn text_layout_wrapped(
+        &self,
+        s: &str,
+        fmt: &IDWriteTextFormat,
+        max_w: f32,
+        align: Align,
+    ) -> Result<Text> {
+        self.text_layout_with(s, fmt, max_w, 10_000.0, align, true)
+    }
+
+    /// Height of `s` broken into lines of at most `max_w`.
+    pub fn measure_wrapped(&self, s: &str, fmt: &IDWriteTextFormat, max_w: f32) -> Result<f32> {
+        Ok(self.text_layout_wrapped(s, fmt, max_w, Align::Left)?.h)
+    }
+
+    fn text_layout_with(
+        &self,
+        s: &str,
+        fmt: &IDWriteTextFormat,
+        max_w: f32,
+        max_h: f32,
+        align: Align,
+        wrap: bool,
+    ) -> Result<Text> {
         let w16: Vec<u16> = s.encode_utf16().collect();
         // SAFETY: the string slice and format are valid for the call.
         let layout = unsafe { self.dw.CreateTextLayout(&w16, fmt, max_w, max_h)? };
@@ -290,21 +318,29 @@ impl Gfx {
         // SAFETY: `layout` is valid; the trimming sign is created from `fmt` and used right away.
         unsafe {
             layout.SetTextAlignment(ta)?;
-            layout.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
-            let sign = self.dw.CreateEllipsisTrimmingSign(fmt)?;
-            let trim = DWRITE_TRIMMING {
-                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-                delimiter: 0,
-                delimiterCount: 0,
-            };
-            layout.SetTrimming(&trim, &sign)?;
+            if wrap {
+                layout.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
+            } else {
+                layout.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+                let sign = self.dw.CreateEllipsisTrimmingSign(fmt)?;
+                let trim = DWRITE_TRIMMING {
+                    granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                    delimiter: 0,
+                    delimiterCount: 0,
+                };
+                layout.SetTrimming(&trim, &sign)?;
+            }
         }
         let mut m = DWRITE_TEXT_METRICS::default();
         // SAFETY: `m` is a valid out pointer.
         unsafe { layout.GetMetrics(&mut m)? };
-        let mut lines = [DWRITE_LINE_METRICS::default()];
+        // The first call only counts the lines (it reports a too-small buffer, with the count set);
+        // wrapped text has several.
         let mut n = 0u32;
-        // SAFETY: `lines` and `n` are valid out parameters.
+        // SAFETY: `n` is a valid out parameter; no buffer is passed.
+        let _ = unsafe { layout.GetLineMetrics(None, &mut n) };
+        let mut lines = vec![DWRITE_LINE_METRICS::default(); n.max(1) as usize];
+        // SAFETY: `lines` holds `n` entries and `n` is a valid out parameter.
         unsafe { layout.GetLineMetrics(Some(&mut lines), &mut n)? };
         Ok(Text {
             layout,
@@ -578,6 +614,48 @@ impl<'a> Canvas<'a> {
         Ok(())
     }
 
+    /// Fills a rounded rectangle with a radial gradient: an ellipse of radii `rx` and `ry` around
+    /// `center`, whose `stops` run from the center (0.0) to the rim (1.0); outside the rim the last
+    /// stop continues. Straight-alpha colors, so a stop with alpha 0 fades the glow out.
+    pub fn fill_rrect_radial(
+        &self,
+        r: Rect,
+        radius: f32,
+        center: (f32, f32),
+        rx: f32,
+        ry: f32,
+        stops: &[(f32, Color)],
+    ) -> Result<()> {
+        let stops: Vec<D2D1_GRADIENT_STOP> = stops
+            .iter()
+            .map(|&(position, c)| D2D1_GRADIENT_STOP {
+                position,
+                color: c.d2d(),
+            })
+            .collect();
+        // SAFETY: `stops` outlives the call.
+        let coll = unsafe {
+            self.rt
+                .CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?
+        };
+        let props = D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES {
+            center: v2!(center.0, center.1),
+            gradientOriginOffset: v2!(0.0, 0.0),
+            radiusX: rx,
+            radiusY: ry,
+        };
+        // SAFETY: `props` outlives the call; `coll` is valid.
+        let brush = unsafe { self.rt.CreateRadialGradientBrush(&props, None, &coll)? };
+        let rr = D2D1_ROUNDED_RECT {
+            rect: rf(r),
+            radiusX: radius,
+            radiusY: radius,
+        };
+        // SAFETY: `rr` and the brush are valid for the call.
+        unsafe { self.rt.FillRoundedRectangle(&rr, &brush) };
+        Ok(())
+    }
+
     pub fn push_clip(&self, r: Rect) {
         let rect = rf(r);
         // SAFETY: `rect` outlives the call; balanced by `pop_clip`.
@@ -706,6 +784,25 @@ impl<'a> Canvas<'a> {
     /// Natural size of `s` in `fmt`.
     pub fn measure(&self, s: &str, fmt: &IDWriteTextFormat) -> Result<(f32, f32)> {
         self.gfx.measure(s, fmt)
+    }
+
+    /// Natural height of `s` broken into lines of at most `max_w`.
+    pub fn measure_wrapped(&self, s: &str, fmt: &IDWriteTextFormat, max_w: f32) -> Result<f32> {
+        self.gfx.measure_wrapped(s, fmt, max_w)
+    }
+
+    /// Draws `s` broken into lines inside `r`'s width, from the top of `r`; returns its height.
+    pub fn text_wrapped(
+        &self,
+        s: &str,
+        fmt: &IDWriteTextFormat,
+        r: Rect,
+        align: Align,
+        c: Color,
+    ) -> Result<f32> {
+        let t = self.gfx.text_layout_wrapped(s, fmt, r.w, align)?;
+        self.draw_text_at(&t, r.x, r.y, c);
+        Ok(t.h)
     }
 
     pub fn draw_text_at(&self, t: &Text, x: f32, y: f32, c: Color) {

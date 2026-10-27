@@ -40,6 +40,12 @@ pub fn taskbar_is_dark() -> bool {
     dword(PERSONALIZE, w!("SystemUsesLightTheme")) == Some(0)
 }
 
+/// False when "Transparency effects" is off in Windows (Settings > Personalization > Colors): the system then
+/// replaces every acrylic and mica backdrop with a flat solid color, so the flyout paints its own panel.
+pub fn transparency_enabled() -> bool {
+    dword(PERSONALIZE, w!("EnableTransparency")) != Some(0)
+}
+
 /// The user's accent color, or the Windows default blue.
 pub fn accent_color() -> Rgb {
     match dword(w!(r"Software\Microsoft\Windows\DWM"), w!("AccentColor")) {
@@ -79,6 +85,7 @@ mod tests {
         let _ = app_theme();
         let _ = taskbar_is_dark();
         let _ = accent_color();
+        let _ = transparency_enabled();
     }
 
     #[test]

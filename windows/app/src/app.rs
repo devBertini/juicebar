@@ -120,6 +120,8 @@ pub fn encode_hit(hit: FlyoutHit) -> usize {
         FlyoutHit::Gear => usize::MAX,
         FlyoutHit::RgbSwitch => usize::MAX - 1,
         FlyoutHit::None => usize::MAX - 2,
+        FlyoutHit::Info => usize::MAX - 3,
+        FlyoutHit::Start => usize::MAX - 4,
     }
 }
 
@@ -128,6 +130,8 @@ pub fn decode_hit(v: usize) -> FlyoutHit {
         usize::MAX => FlyoutHit::Gear,
         x if x == usize::MAX - 1 => FlyoutHit::RgbSwitch,
         x if x == usize::MAX - 2 => FlyoutHit::None,
+        x if x == usize::MAX - 3 => FlyoutHit::Info,
+        x if x == usize::MAX - 4 => FlyoutHit::Start,
         i => FlyoutHit::Row(i),
     }
 }
@@ -191,6 +195,11 @@ pub struct App {
     /// devices' lighting).
     rgb_economy: Cell<bool>,
     expanded: RefCell<Option<DeviceKey>>,
+    /// The (i) next to the power saver switch was clicked: its text stays open until the next click or the flyout
+    /// closes.
+    info_open: Cell<bool>,
+    /// The open flyout shows the first-open welcome page instead of the list.
+    welcome: Cell<bool>,
     hotkey_ok: Cell<bool>,
 }
 
@@ -253,6 +262,8 @@ impl App {
             snapshot: RefCell::new(snapshot),
             tracker: RefCell::new(Tracker::default()),
             expanded: RefCell::new(None),
+            info_open: Cell::new(false),
+            welcome: Cell::new(false),
             hotkey_ok: Cell::new(false),
             args,
         }
@@ -616,26 +627,24 @@ impl App {
         let snap = self.snapshot.borrow();
         let expanded = self.expanded.borrow();
         let empty = menu::texts(self.lang, HOTKEY_TEXT).empty;
-        // The footer's right-hand text is the hotkey, except while G HUB is putting the lighting back: then it says
-        // so, instead of fighting it.
+        // While G HUB is putting the lighting back, the footer says so on its own line, instead of fighting it.
         let conflict = self.rgb_economy.get()
             && self
                 .source
                 .borrow()
                 .live()
                 .is_some_and(|live| live.lighting_conflict());
-        let footer_text = if conflict {
-            view::ghub_notice(self.lang).to_string()
-        } else {
-            HOTKEY_TEXT.to_string()
-        };
+        let ghub_notice = conflict.then(|| view::ghub_notice(self.lang));
         view::ui_state(&ViewInput {
             snapshot: &snap,
             theme,
             accent,
             lang: self.lang,
             rgb_economy: self.rgb_economy.get(),
-            hotkey_text: &footer_text,
+            info_open: self.info_open.get(),
+            hotkey_text: HOTKEY_TEXT,
+            ghub_notice,
+            welcome: self.welcome.get(),
             expanded: expanded.as_ref(),
             empty_text: &empty,
             now: clock.wall,
@@ -680,6 +689,14 @@ impl App {
         // The forecast texts are as of now, not as of the last event.
         self.after_live(true);
         *self.expanded.borrow_mut() = view::default_expanded(&self.snapshot.borrow());
+        self.info_open.set(false);
+        // The first open of a new install shows the welcome page; it is marked seen at once, so it never nags.
+        let first = !self.settings.borrow().welcome_seen;
+        self.welcome.set(first);
+        if first {
+            self.settings.borrow_mut().welcome_seen = true;
+            self.save_settings();
+        }
         let hwnd = self.hwnd.get();
         let handlers = Handlers {
             on_hit: Box::new(move |hit| post(hwnd, WM_FLYOUT_HIT, encode_hit(hit))),
@@ -788,6 +805,14 @@ impl App {
                 self.settings.borrow_mut().rgb_economy = on;
                 self.save_settings();
                 self.after_live(false);
+                self.refresh_flyout();
+            }
+            FlyoutHit::Info => {
+                self.info_open.set(!self.info_open.get());
+                self.refresh_flyout();
+            }
+            FlyoutHit::Start => {
+                self.welcome.set(false);
                 self.refresh_flyout();
             }
             FlyoutHit::Gear => {
@@ -1083,6 +1108,8 @@ mod tests {
             FlyoutHit::Row(7),
             FlyoutHit::Gear,
             FlyoutHit::RgbSwitch,
+            FlyoutHit::Info,
+            FlyoutHit::Start,
             FlyoutHit::None,
         ] {
             assert_eq!(decode_hit(encode_hit(hit)), hit);

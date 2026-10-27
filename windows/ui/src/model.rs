@@ -5,6 +5,8 @@
 //! The app integration maps the core's snapshot onto these types; this crate only draws them.
 //! `UiState::sample()` is the Windows scene of the design mockup (`docs/design/options/1-native`).
 
+use crate::icon::Juice;
+
 /// Light or dark appearance of the flyout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
@@ -49,7 +51,8 @@ pub struct UiDevice {
     pub connection: String,
     /// Devices that are on come first; the others sit under the "Desligados" separator.
     pub on: bool,
-    pub percent: u8,
+    /// The level; `None` while the device gives no reading: the row shows "–", an empty capsule and no red.
+    pub percent: Option<u8>,
     /// Filled part of the capsule, 0.0 to 1.0.
     pub capsule_fraction: f32,
     pub status_line: String,
@@ -62,6 +65,8 @@ pub struct UiDevice {
     /// Hours (relative to now, may be positive) at which the forecast reaches 0 %.
     pub forecast_empty_hours: f32,
     pub usage_today: String,
+    /// Hours of use on each of the last 7 local days, oldest first; the last one is today.
+    pub week_hours: [f32; 7],
     /// Battery health in percent; `None` shows "aprendendo".
     pub health: Option<u8>,
     pub charging: bool,
@@ -88,6 +93,10 @@ pub struct UiLabels {
     pub off_devices: String,
     /// The footer switch: "Economia de Energia".
     pub rgb_economy: String,
+    /// What the (i) next to the switch says: it turns the devices' LEDs off to save battery.
+    pub rgb_info: String,
+    /// Over the week's bars: "Horas de uso por dia".
+    pub usage_by_day: String,
 }
 
 impl Default for UiLabels {
@@ -101,6 +110,39 @@ impl Default for UiLabels {
             learning: "aprendendo".into(),
             off_devices: "Desligados".into(),
             rgb_economy: "Economia de Energia".into(),
+            rgb_info:
+                "Desliga as luzes (LEDs) dos dispositivos compatíveis para a bateria durar mais"
+                    .into(),
+            usage_by_day: "Horas de uso por dia".into(),
+        }
+    }
+}
+
+/// The first-open page that replaces the device list (`UiState::welcome`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiWelcome {
+    pub title: String,
+    /// What JuiceBar does.
+    pub body: String,
+    /// "Deixe o ícone ao lado do relógio".
+    pub tray_title: String,
+    /// The Settings path, and the other way: drag it from the arrow.
+    pub tray_steps: String,
+    /// "Idealizado por Claudio Bertini".
+    pub credit: String,
+    /// The button: "Começar".
+    pub start: String,
+}
+
+impl Default for UiWelcome {
+    fn default() -> UiWelcome {
+        UiWelcome {
+            title: "Boas-vindas ao JuiceBar".into(),
+            body: "O JuiceBar mostra a bateria do mouse, do teclado, do headset e dos controles em um só lugar e avisa antes que alguma acabe.".into(),
+            tray_title: "Deixe o ícone ao lado do relógio".into(),
+            tray_steps: "Abra Configurações > Personalização > Barra de tarefas > Outros ícones da bandeja do sistema e ative o JuiceBar. Ou arraste-o da seta ^ para a barra de tarefas.".into(),
+            credit: "Idealizado por Claudio Bertini".into(),
+            start: "Começar".into(),
         }
     }
 }
@@ -112,23 +154,34 @@ pub struct UiState {
     pub accent: Rgb,
     pub devices: Vec<UiDevice>,
     pub rgb_economy: bool,
+    /// The (i) next to the switch was clicked: its text stays open until the next click (it also shows while
+    /// the pointer is over the (i)).
+    pub info_open: bool,
     pub hotkey_text: String,
+    /// The small line under the footer while G HUB puts the lighting back; `None` hides it.
+    pub ghub_notice: Option<String>,
     pub alert: IconState,
+    /// The juice color of the tray mark: the glow at the top of the panel takes it.
+    pub juice: Juice,
     /// At or below this percent a device is drawn as low (red).
     pub low_threshold: u8,
     /// The seven weekday labels under the chart, oldest first.
     pub day_labels: [String; 7],
+    /// The weekday under each of the 7 usage bars, oldest first (the last is today).
+    pub usage_labels: [String; 7],
     /// Shown in place of the device list while there are no devices: the first line is the
     /// title, a second line (after a line break) the hint. Unused when `devices` is not empty.
     pub empty_text: String,
     /// The fixed labels.
     pub labels: UiLabels,
+    /// The first-open page; while `Some`, it is drawn instead of the list and the footer.
+    pub welcome: Option<UiWelcome>,
 }
 
 impl UiState {
     /// True for a device that is on and at or below the low threshold.
     pub fn is_low(&self, d: &UiDevice) -> bool {
-        d.on && d.percent <= self.low_threshold
+        d.on && d.percent.is_some_and(|p| p <= self.low_threshold)
     }
 
     /// Indices of `devices` in display order: devices that are on first, then the off ones.
@@ -141,7 +194,7 @@ impl UiState {
     }
 
     /// The mockup's Windows scene: G703 23 % with warning and expanded chart, G915 X charging,
-    /// Controle Xbox 64 %, G733 off.
+    /// Xbox Controller 64 %, G733 off.
     pub fn sample(theme: Theme) -> UiState {
         let accent = match theme {
             Theme::Light => Rgb(0x00, 0x67, 0xc0),
@@ -157,7 +210,7 @@ impl UiState {
                     glyph: Glyph::Mouse,
                     connection: "LIGHTSPEED".into(),
                     on: true,
-                    percent: 23,
+                    percent: Some(23),
                     capsule_fraction: 0.23,
                     status_line: "~3 h de uso".into(),
                     warning: Some("Não chega ao fim do dia: carregue antes das 18h".into()),
@@ -172,6 +225,7 @@ impl UiState {
                     forecast_from: Some((0.0, 23.0)),
                     forecast_empty_hours: 3.1,
                     usage_today: "4 h 10 min".into(),
+                    week_hours: [3.2, 5.1, 4.6, 6.0, 1.4, 0.8, 4.2],
                     health: Some(94),
                     charging: false,
                     expanded: true,
@@ -181,7 +235,7 @@ impl UiState {
                     glyph: Glyph::Keyboard,
                     connection: "LIGHTSPEED".into(),
                     on: true,
-                    percent: 46,
+                    percent: Some(46),
                     capsule_fraction: 0.46,
                     status_line: "cheio em ~1 h 10 min".into(),
                     warning: None,
@@ -189,6 +243,7 @@ impl UiState {
                     forecast_from: None,
                     forecast_empty_hours: 0.0,
                     usage_today: "6 h 05 min".into(),
+                    week_hours: [5.0, 6.4, 7.2, 6.8, 2.0, 1.2, 6.1],
                     health: Some(98),
                     charging: true,
                     expanded: false,
@@ -198,7 +253,7 @@ impl UiState {
                     glyph: Glyph::Headset,
                     connection: String::new(),
                     on: false,
-                    percent: 71,
+                    percent: Some(71),
                     capsule_fraction: 0.71,
                     status_line: "desligado · 71% às 14:02".into(),
                     warning: None,
@@ -206,16 +261,17 @@ impl UiState {
                     forecast_from: None,
                     forecast_empty_hours: 0.0,
                     usage_today: "1 h 30 min".into(),
+                    week_hours: [0.5, 1.8, 2.2, 1.0, 0.0, 0.0, 1.5],
                     health: Some(89),
                     charging: false,
                     expanded: false,
                 },
                 UiDevice {
-                    name: "Controle Xbox".into(),
+                    name: "Xbox Controller".into(),
                     glyph: Glyph::Gamepad,
                     connection: "Bluetooth".into(),
                     on: true,
-                    percent: 64,
+                    percent: Some(64),
                     capsule_fraction: 0.64,
                     status_line: "~18 h de uso".into(),
                     warning: None,
@@ -223,14 +279,18 @@ impl UiState {
                     forecast_from: None,
                     forecast_empty_hours: 0.0,
                     usage_today: "1 h 15 min".into(),
+                    week_hours: [0.0, 0.0, 2.5, 0.0, 3.1, 4.0, 1.3],
                     health: None,
                     charging: false,
                     expanded: false,
                 },
             ],
             rgb_economy: false,
+            info_open: false,
             hotkey_text: "Ctrl+Alt+B".into(),
+            ghub_notice: None,
             alert: IconState::Warning,
+            juice: Juice::Red,
             low_threshold: 20,
             day_labels: [
                 day("seg"),
@@ -241,9 +301,43 @@ impl UiState {
                 day("sáb"),
                 day("dom"),
             ],
+            usage_labels: ["ter", "qua", "qui", "sex", "sáb", "dom", "seg"].map(String::from),
             empty_text: String::new(),
             labels: UiLabels::default(),
+            welcome: None,
         }
+    }
+
+    /// The sample with every card closed.
+    pub fn sample_collapsed(theme: Theme) -> UiState {
+        let mut s = UiState::sample(theme);
+        for d in &mut s.devices {
+            d.expanded = false;
+        }
+        s
+    }
+
+    /// The sample where the Xbox controller gives no reading: "–", an empty capsule, nothing red.
+    pub fn sample_no_reading(theme: Theme) -> UiState {
+        let mut s = UiState::sample_collapsed(theme);
+        s.juice = Juice::Purple;
+        s.alert = IconState::Normal;
+        let d = &mut s.devices[3];
+        d.percent = None;
+        d.capsule_fraction = 0.0;
+        d.status_line = "sem leitura".into();
+        s.devices[0].percent = Some(58);
+        s.devices[0].capsule_fraction = 0.58;
+        s.devices[0].warning = None;
+        s
+    }
+
+    /// The first-open page.
+    pub fn sample_welcome(theme: Theme) -> UiState {
+        let mut s = UiState::sample(theme);
+        s.juice = Juice::Purple;
+        s.welcome = Some(UiWelcome::default());
+        s
     }
 }
 
@@ -305,7 +399,7 @@ mod tests {
     fn sample_matches_the_mockup_scene() {
         let s = UiState::sample(Theme::Light);
         assert_eq!(s.devices.len(), 4);
-        assert_eq!(s.devices[0].percent, 23);
+        assert_eq!(s.devices[0].percent, Some(23));
         assert!(s.devices[0].warning.is_some() && s.devices[0].expanded);
         assert!(s.devices[1].charging);
         assert!(!s.devices[2].on);
@@ -323,10 +417,41 @@ mod tests {
         let s = UiState::sample(Theme::Light);
         assert!(!s.is_low(&s.devices[0]), "23 is above 20");
         let mut d = s.devices[0].clone();
-        d.percent = 20;
+        d.percent = Some(20);
         assert!(s.is_low(&d));
         d.on = false;
         assert!(!s.is_low(&d));
+    }
+
+    #[test]
+    fn a_device_without_a_reading_is_never_low() {
+        let s = UiState::sample_no_reading(Theme::Light);
+        assert!(s.devices[3].on && s.devices[3].percent.is_none());
+        assert!(!s.is_low(&s.devices[3]));
+        assert_eq!(s.devices[3].capsule_fraction, 0.0);
+    }
+
+    #[test]
+    fn sample_variants_differ_where_they_should() {
+        assert!(
+            UiState::sample_collapsed(Theme::Dark)
+                .devices
+                .iter()
+                .all(|d| !d.expanded)
+        );
+        let w = UiState::sample_welcome(Theme::Dark);
+        assert!(w.welcome.is_some() && UiState::sample(Theme::Dark).welcome.is_none());
+        assert!(
+            w.devices.len() == 4,
+            "the list stays for the page behind it"
+        );
+    }
+
+    #[test]
+    fn week_hours_are_non_negative_and_end_today() {
+        for d in &UiState::sample(Theme::Light).devices {
+            assert!(d.week_hours.iter().all(|h| (0.0..=24.0).contains(h)));
+        }
     }
 
     #[test]
