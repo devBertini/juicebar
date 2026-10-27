@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! JuiceBar's core: pure logic, no device, file, clock or thread (spec/ARCHITECTURE.md).
 //! The shell feeds it transport events and the time; it answers with actions.
 #![forbid(unsafe_code)]

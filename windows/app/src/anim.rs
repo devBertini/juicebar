@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The tray mark's motion (spec/design/DESIGN.md, "The bar item and the tray icon"): gentle and rare.
 //!
 //! * A *run* is 2 seconds at about 20 frames per second: one `SetTimer` that exists only while the run

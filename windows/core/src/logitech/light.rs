@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The RGB economy's driver: the explicit calls the app makes, and the chains of lighting requests they start
 //! (spec/PROTOCOL.md, "Lighting"). Nothing here runs as a side effect of reading a battery: a chain starts only
 //! when the app orders the economy on or off, when a device the economy is wanted on (re)connects, or when a

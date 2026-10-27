@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The Windows side of the live source: the HID transport, the one timer, the files and the log behind
 //! [`Host`], the clock the core is given, and the translation of the transport's events into the core's.
 

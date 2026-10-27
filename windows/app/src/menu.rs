@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The tray's context menu: the Win32 popup, with its texts from the core's table (`spec/strings.tsv`).
 
 use windows::Win32::Foundation::{HWND, POINT};

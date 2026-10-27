@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! juicebar-probe: read-only HID++ probe of Logitech receivers and devices on Windows.
 //!
 //! Usage: juicebar-probe [--enumerate] [--pid <hex>] [--listen <seconds>] [--no-probe] [--trace <file>]

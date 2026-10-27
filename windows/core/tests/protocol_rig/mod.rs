@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! A test rig for the Logitech provider: a fake device answering from a probe trace (spec/fixtures), the shell's
 //! one-shot timer, and a log of everything sent and emitted.
 

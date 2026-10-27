@@ -1,3 +1,5 @@
+/* Copyright (c) 2026 Claudio Bertini (devBertini)
+   SPDX-License-Identifier: GPL-3.0-or-later */
 /* JuiceBar harness: inline SVG sprite (our own drawings, 24x24, line style).
    Use:  <svg class="g"><use href="#g-mouse"/></svg>   or   JuiceBarGlyph("g-mouse", 18)
    Style them from CSS on svg.g (fill, stroke, stroke-width); the defaults sit below. */

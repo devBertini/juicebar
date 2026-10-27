@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Win32 HID access: enumeration with CM_Get_Device_Interface_List, opening with shared access,
 //! overlapped reads with a timeout, overlapped writes of full-length reports.
 

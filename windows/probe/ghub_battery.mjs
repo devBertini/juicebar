@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Cross-check for juicebar-probe: prints each device's battery as Logitech G HUB reports it over its
 // local websocket (ws://localhost:9010, subprotocol "json"). Run with node 24 (global WebSocket, no
 // package). Read-only: only GET requests. Prints a whitelist of fields (no serial or unit ID).

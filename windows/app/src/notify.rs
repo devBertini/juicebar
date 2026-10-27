@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Which notices a new snapshot calls for: the smart or low warning when a device starts to have
 //! one, and "battery full" when a device reaches 100 %. Each fires once per episode and re-arms
 //! when the condition ends. Pure: the tray shows what this returns.

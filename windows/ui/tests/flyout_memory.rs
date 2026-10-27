@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Opening and closing the flyout leaves the process near its idle cost: no Direct3D, DXGI,
 //! DirectComposition, Direct2D or WARP module stays loaded, and private memory comes back.
 //! Its own test binary, so no other test holds Direct2D while it measures.

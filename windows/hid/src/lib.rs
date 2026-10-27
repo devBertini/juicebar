@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! JuiceBar's Windows HID transport (`spec/ARCHITECTURE.md`, row "transport").
 //!
 //! `Transport::start` opens every Logitech HID++ collection present (VID 046D, usage page

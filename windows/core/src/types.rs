@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The types every module shares: what a provider reports (spec/PROVIDERS.md) and the time the shell passes in.
 
 /// A moment, always passed in by the shell: the core never reads a clock.

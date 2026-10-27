@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The Logitech provider against the probe traces of the owner's devices (spec/fixtures): a fake device answers each
 //! request from the trace, and the provider's frames and events are asserted.
 

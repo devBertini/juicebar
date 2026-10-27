@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Maps the core's `Snapshot` onto the flyout's `UiState`. Pure: no Win32, so it is unit tested.
 
 use juicebar_core::estimator::LOW_PERCENT;

@@ -1,3 +1,5 @@
+/* Copyright (c) 2026 Claudio Bertini (devBertini)
+   SPDX-License-Identifier: GPL-3.0-or-later */
 /* JuiceBar harness: the illustrative data every option draws (pt-BR).
    Sample "now" is segunda-feira 26/10/2026, 14:32. History hours are offsets from now
    (negative = past), levels in percent, one point per hour plus the anchors. */

@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Measures what the flyout costs the process: private bytes, working set and the graphics
 //! modules loaded, at idle (tray marks drawn), with the flyout open and after it is destroyed.
 //!

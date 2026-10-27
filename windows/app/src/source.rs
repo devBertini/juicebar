@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Where the snapshot comes from: the real devices through the core (`Live`, the default), the demo
 //! devices of `docs/design/harness/sample-state.js` (hand-ported), or "no devices yet".
 

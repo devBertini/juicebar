@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Direct2D and DirectWrite plumbing: factories, a `Canvas` with safe drawing helpers, text
 //! layouts, SVG-path geometry, and the offscreen (WIC) render target with the PNG writer.
 //!

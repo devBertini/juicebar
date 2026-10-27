@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! HID++ frames: building, answer matching, the send allow-list and the decoders (spec/PROTOCOL.md).
 //! Pure code: no device, no clock. The Logitech provider (`logitech`) drives these.
 

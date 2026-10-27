@@ -1,4 +1,5 @@
-# Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+# Copyright (c) 2026 Claudio Bertini (devBertini)
+# SPDX-License-Identifier: GPL-3.0-or-later
 """JuiceBar estimator: the executable reference of spec/estimator.md.
 
 Python 3.9 standard library only. The Rust core (Windows) and the Swift core (Mac)

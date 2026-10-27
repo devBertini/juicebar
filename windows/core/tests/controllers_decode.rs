@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The game-controller decoders on reports synthesized from the documented layout
 //! (docs/research/controllers.md): USB report 0x01 of 64 bytes with the battery at byte 53, Bluetooth report 0x31
 //! with it at byte 54.

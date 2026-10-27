@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! A device's history as text lines (spec/estimator.md, "Storage and cost"; spec/ARCHITECTURE.md, module `store`).
 //!
 //! One event per line, a versioned header first. The shell does the file I/O; the core produces and reads the lines:

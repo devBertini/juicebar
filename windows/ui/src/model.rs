@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The view model of the flyout and the tray mark: plain data, no Win32.
 //!
 //! The app integration maps the core's snapshot onto these types; this crate only draws them.

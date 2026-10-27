@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Hardware proof of the RGB economy through the real provider (plan stage 19; spec/PROTOCOL.md, "Lighting").
 //!
 //! `cargo run -p juicebar --example lighting_cycle -- <pid hex> [--trace <file>] [--hold <seconds>] [--saved <n>]`

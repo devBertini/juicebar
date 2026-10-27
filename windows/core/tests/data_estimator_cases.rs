@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Reproduces every scenario of `spec/estimator-cases.tsv` within the tolerances of spec/estimator.md, and runs the
 //! same scenarios in English to prove no text is missing.
 

@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The shell: one hidden top-level window that owns the tray icon, the hotkey, the timers and the
 //! flyout, and one message loop. Nothing here polls; the process sleeps in `GetMessageW`.
 

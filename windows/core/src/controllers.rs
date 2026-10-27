@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The `game-controllers` provider's pure side (spec/PROVIDERS.md, docs/research/controllers.md): which products are
 //! game pads, the identity of one, and the decoders that turn what a pad or the system reports into a
 //! [`BatteryReading`]. The app shell opens, reads and closes; nothing here touches a device.

@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Paints the flyout onto a `Canvas`. The window and the PNG seam both call `paint_flyout`, so a
 //! render is what the user sees (apart from the system backdrop, replaced by a solid panel).
 

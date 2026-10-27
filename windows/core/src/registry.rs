@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The registry: the devices the app knows, which of them the user registered, who is on and the last battery
 //! reading of each (spec/PROVIDERS.md). Providers push events in; the registry answers with what changed.
 //!

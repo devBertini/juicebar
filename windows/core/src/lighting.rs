@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Lighting: the requests, the answers and the allow-list of the RGB economy (spec/PROTOCOL.md, "Lighting").
 //!
 //! The economy is the one thing the Logitech provider writes to a device besides the receiver's notification

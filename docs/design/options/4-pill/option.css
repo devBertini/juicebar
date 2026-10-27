@@ -1,3 +1,5 @@
+/* Copyright (c) 2026 Claudio Bertini (devBertini)
+   SPDX-License-Identifier: GPL-3.0-or-later */
 /* Option 4: Single pill. Time-centric: one pill in the bar, a runway in the panel. */
 :root[data-theme="light"] {
   --glass: rgba(248,248,250,.80); --glass-edge: rgba(255,255,255,.7); --line: rgba(20,22,40,.10);

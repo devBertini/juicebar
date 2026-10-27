@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! JuiceBar for Windows: one tray icon, a flyout above it, notices, the Ctrl+Alt+B hotkey.
 //! The shell is fed by the real devices through the core (`live`), or by a demo source.
 #![windows_subsystem = "windows"]

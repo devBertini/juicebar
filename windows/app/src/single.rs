@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! One running JuiceBar per user session: a named mutex, and a registered window message a second
 //! launch sends to the first so that it opens its flyout.
 

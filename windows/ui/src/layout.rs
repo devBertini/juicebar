@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Pure layout math of the flyout: every rectangle in device-independent pixels (DIPs, 96 dpi),
 //! hit-testing, DPI scaling and the placement of the window in a monitor's work area.
 //! The numbers follow the mockup's Windows scene (`docs/design/options/1-native/option.css`).

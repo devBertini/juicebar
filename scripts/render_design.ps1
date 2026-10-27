@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Claudio Bertini (devBertini)
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Renders JuiceBar design options with headless Chrome and rebuilds the gallery.
 #   powershell -NoProfile -File scripts\render_design.ps1 [-Option <n-slug>]
 # Output: docs\design\renders\<n-slug>\{mac-light,mac-dark,win-light,win-dark}.png and docs\design\index.html

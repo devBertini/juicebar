@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The tray mark: a juice glass with a straw, drawn with Direct2D from the SVG paths of
 //! `spec/design/mark/`. The glass outline and the straw take the taskbar's foreground; the juice
 //! takes the state's colour (green, grape purple, red). A `Frame` holds the animation phase: the

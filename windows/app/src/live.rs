@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The live source: the sans-I/O loop of `spec/ARCHITECTURE.md` closed around the real devices.
 //!
 //! Transport events and the time go into the Logitech provider; its actions come back and are executed here

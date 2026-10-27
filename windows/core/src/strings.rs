@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Every visible text, in English (the source) and Brazilian Portuguese, from `spec/strings.tsv`.
 //! The language is a tag the shell passes in: `"pt-BR"` selects Portuguese, anything else English.
 

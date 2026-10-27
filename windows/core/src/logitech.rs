@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The `logitech-hidpp` provider as a sans-I/O state machine (spec/PROTOCOL.md, spec/PROVIDERS.md).
 //!
 //! The shell feeds `handle` the transport events (a collection arrived or went, a report came in) and calls `tick`

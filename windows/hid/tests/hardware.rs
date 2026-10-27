@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Hardware test: needs the owner's receivers (046D:C539, 046D:C547) and optionally the G733
 //! dongle (046D:0AFE) plugged in. `cargo test -p juicebar-hid -- --ignored`
 

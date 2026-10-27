@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The notification-area icon: `Shell_NotifyIconW` with `NOTIFYICON_VERSION_4`, one icon with
 //! `uID` 1. The mark is re-rendered only when its look, the taskbar theme or the icon size changes.
 //! The animation (`anim`) puts its own pictures on the icon with `show_frame` and `show_rest`.

@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The provider's clock: request timeouts, the dongle ping, the slow refresh, the grace after a reconnection and the
 //! Wake actions that ask the shell for each of them.
 

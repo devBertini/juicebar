@@ -1,4 +1,5 @@
-# Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+# Copyright (c) 2026 Claudio Bertini (devBertini)
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Writes spec/estimator-cases.tsv: named scenarios (inputs as compact event strings,
 expected outputs as columns) computed by estimator.py. Both cores parse the file and
 must reproduce every expected column within the tolerances of spec/estimator.md.

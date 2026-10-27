@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! JuiceBar's Windows drawing crate: the tray mark and the flyout.
 //! See `spec/design/DESIGN.md`. Pure parts (model, layout, path parsing) have no Win32 in them.
 

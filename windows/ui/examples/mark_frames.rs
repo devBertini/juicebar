@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The render seam of the animated tray mark: writes PNG strips of a whole 2-second run for every
 //! juice on both taskbar themes at 16 and 24 px, a 4x zoomed sheet of each run, and prints the
 //! contrast of every juice against its taskbar.

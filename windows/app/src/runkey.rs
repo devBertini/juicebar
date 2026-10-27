@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Start with Windows: the value `JuiceBar` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
 //! holds the quoted path of the exe. The menu's check reads and writes it.
 

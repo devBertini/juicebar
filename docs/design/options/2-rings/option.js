@@ -1,3 +1,5 @@
+/* Copyright (c) 2026 Claudio Bertini (devBertini)
+   SPDX-License-Identifier: GPL-3.0-or-later */
 // JuiceBar option 2: Rings
 (function () {
   var S = window.JUICEBAR_SAMPLE, F = JuiceBarFrame, plat = F.platform;

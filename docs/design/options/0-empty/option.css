@@ -1,3 +1,5 @@
+/* Copyright (c) 2026 Claudio Bertini (devBertini)
+   SPDX-License-Identifier: GPL-3.0-or-later */
 /* Template: outlines every slot so the harness layout can be checked. Replace in a real option. */
 .slot-fill {
   width: 100%; height: 100%;

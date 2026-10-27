@@ -1,3 +1,5 @@
+/* Copyright (c) 2026 Claudio Bertini (devBertini)
+   SPDX-License-Identifier: GPL-3.0-or-later */
 /* JuiceBar option 2: Rings. One ring per device, the arc is the level. */
 :root[data-theme="light"] {
   --fg: #1d1d1f; --muted: rgba(29,29,31,.60); --faint: rgba(29,29,31,.42);

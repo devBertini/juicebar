@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The estimator: a port of `spec/reference/estimator.py` (spec/estimator.md). Same names, same arithmetic order.
 //!
 //! Time is integer seconds since the epoch (UTC); local time is `t + utc_offset` and day, hour and weekday come from

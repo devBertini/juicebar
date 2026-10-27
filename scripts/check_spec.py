@@ -1,4 +1,5 @@
-# Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+# Copyright (c) 2026 Claudio Bertini (devBertini)
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Checks that the shared contract in spec/ is well formed, so both apps' cores can read it.
 
   python3 -B scripts/check_spec.py        (exit 0 when every file passes; one line per problem otherwise)

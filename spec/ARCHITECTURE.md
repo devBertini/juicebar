@@ -27,6 +27,6 @@ Action  = Send(endpoint, bytes) | Emit(ProviderEvent) | Persist(device, lines) |
 - `Snapshot` is rebuilt by the core after any event that changed what is shown, and the shell redraws only when it differs from the last one.
 
 ## Rules for the code
-- Every source file starts with `Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.` in its language's comment form.
+- Every source file starts with two comment lines in its language's form: `Copyright (c) 2026 Claudio Bertini (devBertini)` and `SPDX-License-Identifier: GPL-3.0-or-later`.
 - Windows: Rust edition 2024, the `windows` crate only, `#![forbid(unsafe_code)]` in `core`; `unsafe` only in the app's Win32 calls, each block with a one-line reason. Mac: Swift 6, no package, the core free of AppKit and IOKit.
 - No polling loops, no busy waits, no sleeping threads waiting for time; one I/O thread on Windows blocked on its handles.

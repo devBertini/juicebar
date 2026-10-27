@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The flyout window: a `WS_POPUP` created when shown and destroyed when hidden. Direct2D draws it
 //! on the CPU (the render seam's WIC path, so a PNG is what the user sees) into a 32-bit
 //! premultiplied DIB section, and `WM_PAINT` copies that to the window with GDI. The DWM frame is

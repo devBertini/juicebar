@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The app's folder, `%LOCALAPPDATA%\JuiceBar`: `settings.txt` and `history\<key>.txt`, one history file per
 //! device (spec/estimator.md, "Storage and cost"). The core produces the lines; this module only moves them.
 //!

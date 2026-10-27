@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The flyout and the tray mark, for looking at.
 //!
 //! `cargo run -p juicebar-ui --example flyout_demo -- --render <folder>` writes the flyout (light and

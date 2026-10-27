@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The RGB economy through the Logitech provider: the requests it sends, the level it saves and restores, what it
 //! does when something else puts the lighting back, and what it never does (spec/PROTOCOL.md, "Lighting").
 //! The device is a fake with the G915 X's BrightnessControl as measured on 26/10/2026.

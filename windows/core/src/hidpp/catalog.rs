@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The device catalog (`spec/devices.tsv`) and the voltage-to-percent curves (`spec/curves.tsv`), embedded at build
 //! time and parsed once. Both are shared with the Mac core, so the files stay the single source.
 

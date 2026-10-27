@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Win32 HID access: listing the present interfaces, reading a collection's capabilities, and
 //! `Port`, an opened collection with one outstanding overlapped read and a queue of overlapped
 //! writes. Nothing here blocks except `Drop`, which waits for cancelled I/O.

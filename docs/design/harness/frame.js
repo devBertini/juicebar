@@ -1,3 +1,5 @@
+/* Copyright (c) 2026 Claudio Bertini (devBertini)
+   SPDX-License-Identifier: GPL-3.0-or-later */
 /* JuiceBar harness: builds the desktop scene around the option's slots.
    Include it synchronously at the START of <body> (after glyphs.js and sample-state.js);
    the slot elements exist right after this script runs, so option scripts can fill them.

@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Embeds the application manifest with the linker alone (no resource compiler needed):
 //! per-monitor DPI v2, Windows 10/11 compatibility, UTF-8 code page.
 

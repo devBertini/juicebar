@@ -1,3 +1,5 @@
+/* Copyright (c) 2026 Claudio Bertini (devBertini)
+   SPDX-License-Identifier: GPL-3.0-or-later */
 (function () {
   var S = window.JUICEBAR_SAMPLE, F = JuiceBarFrame, mac = F.platform === "mac";
   var devs = S.devices.filter(function (d) { return !d.platforms || d.platforms.indexOf(F.platform) >= 0; });

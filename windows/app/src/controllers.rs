@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The `game-controllers` provider (spec/PROVIDERS.md, docs/research/controllers.md): DualSense and Xbox pads.
 //!
 //! A game pad streams input reports hundreds of times a second, so this provider never follows one. It listens for

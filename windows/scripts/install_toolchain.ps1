@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Claudio Bertini (devBertini)
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Installs the Windows build toolchain of JuiceBar: Visual Studio Build Tools with the C++ workload (MSVC linker and
 # Windows SDK) and rustup with the stable MSVC Rust toolchain, both from winget, newest versions.
 # The Build Tools installer asks for elevation once (UAC). Prints one "STEP" line per phase and "DONE" or "FAILED".

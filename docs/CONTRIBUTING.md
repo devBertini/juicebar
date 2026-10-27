@@ -13,5 +13,5 @@ A provider is merged only when it was proven on a real device, by you or by the 
 ## Rules
 - **No copied code.** Protocol facts (which bytes ask for the battery, what the answer means) may come from any public source, cited. Code, and data tables such as voltage curves, may not be copied from projects under another license (GPL projects included): write your own, and calibrate curves from your own device's measurements.
 - **Lightweight by design.** No polling loops, no background threads that wake while nothing changes, no new dependency without a discussion first (the Windows app depends only on Microsoft's `windows` crate; the Mac app on no package).
-- **Every source file** starts with `Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.` for files of the project; a contributed file adds its author's line below it. Contributions are under the MIT License (`LICENSE`).
+- **Every source file** starts with `Copyright (c) 2026 Claudio Bertini (devBertini)` and `SPDX-License-Identifier: GPL-3.0-or-later`; a contributed file adds its author's copyright line below the first. Contributions are under the GNU General Public License, version 3 or any later version (`LICENSE`).
 - English in code, comments and documents; the apps ship in English and Brazilian Portuguese.

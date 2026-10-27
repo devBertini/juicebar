@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The I/O thread: one thread blocked in `WaitForMultipleObjects` on the control event and on
 //! each port's pending read (and write) event, plus the `CM_Register_Notification` callback
 //! that feeds it hot-plug messages. No timeouts, no polling.

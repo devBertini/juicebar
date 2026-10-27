@@ -1,4 +1,5 @@
-# Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+# Copyright (c) 2026 Claudio Bertini (devBertini)
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Tests of the reference estimator: every rule of spec/estimator.md and its edges.
 
     python3 -B spec/reference/test_estimator.py

@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The render seam: the flyout drawn offscreen (WIC bitmap) exactly as the window draws it,
 //! for tests and for `cargo run -p juicebar-ui --example flyout_demo -- --render <folder>`.
 

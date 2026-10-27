@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! A small SVG path-data parser: the glyph and mark drawings are kept as the SVG `d` strings
 //! of `docs/design/harness/glyphs.js` and `spec/design/mark/`, converted here to absolute segments.
 

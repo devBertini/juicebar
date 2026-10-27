@@ -1,3 +1,5 @@
+/* Copyright (c) 2026 Claudio Bertini (devBertini)
+   SPDX-License-Identifier: GPL-3.0-or-later */
 /* JuiceBar option 1 Native: looks like part of the system. Mac = Liquid Glass / Control Center, Windows = Windows 11 Quick Settings. */
 :root[data-theme="light"] {
   --fg: #1d1d1f; --fg2: rgba(29,29,31,.62); --fg3: rgba(29,29,31,.42);

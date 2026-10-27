@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What the UI shows (spec/design/DESIGN.md): the bar icon's state, the tooltip and one `DeviceView` per device with
 //! every text already formatted. The core rebuilds it after any event that changed what is shown; the shell redraws
 //! only when it differs from the last one (`PartialEq`).

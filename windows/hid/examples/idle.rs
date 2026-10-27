@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Idle cost of the transport: starts it, lets the enumeration settle, idles, and prints this
 //! process's CPU time and private bytes at the start and the end.
 //!

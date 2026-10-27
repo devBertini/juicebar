@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Claudio Bertini (devBertini). MIT License.
+// Copyright (c) 2026 Claudio Bertini (devBertini)
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The glyph drawings (24 x 24, stroke 1.75, round caps) ported by hand from
 //! `docs/design/harness/glyphs.js`, plus the tray mark's SVG paths from `spec/design/mark/`.
 
