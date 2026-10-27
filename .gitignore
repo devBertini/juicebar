@@ -22,3 +22,5 @@ captures/
 *.p8
 *.p12
 *.mobileprovision
+# Python caches
+__pycache__/
